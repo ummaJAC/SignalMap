@@ -1,0 +1,54 @@
+# dependencies
+node_modules/
+server/node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Env variables
+.env
+.env.*
+!.env.example
+
+# AI / IDE / Context dumps
+.gemini/
+.vscode/
+.idea/
+PROJECT_CONTEXT_FULL.txt
+
+# Android build artifacts (source code stays!)
+android/build/
+android/app/build/
+android/.gradle/
+android/.idea/
+android/local.properties
+
+# Signing keys
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# OS
+.DS_Store
+Thumbs.db
+*.pem
+
+# typescript
+*.tsbuildinfo
+
+# iOS
+/ios/build/
+/ios/Pods/

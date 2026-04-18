@@ -1,0 +1,9 @@
+{
+  "TrustReceipts": "0x3AFC288E6b7bD6c69dBa622EE57659f450BC1D61",
+  "ChallengeManager": "0xA3E1f07aED2d1120FABF75dd0B8a6a5523fcAd25",
+  "GeoCorp": "0x616e6907FBAd7CDCC18075b67B4119119B478FEf",
+  "deployer": "0x1dB21B7605FE0Bb926a1d4b219797864c44113AD",
+  "network": "flow-testnet",
+  "chainId": 545,
+  "deployedAt": "2026-04-11T15:35:25.353Z"
+}

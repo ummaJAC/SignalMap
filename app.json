@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "SignalMap",
+    "slug": "signalmap",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#22C55E"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "SignalMap needs location to map cellular coverage in your area.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "SignalMap needs background location to continuously map coverage while you move."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#22C55E"
+      },
+      "edgeToEdgeEnabled": false,
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.knayx.signalmap"
+    },
+    "plugins": [
+      "expo-location",
+      [
+        "@rnmapbox/maps",
+        {
+          "RNMapboxImpl": "mapbox",
+          "RNMapboxDownloadToken": "YOUR_MAPBOX_DOWNLOAD_TOKEN"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "59859db6-0c5b-4b30-816e-12616d697a94"
+      }
+    },
+    "owner": "knayx"
+  }
+}
