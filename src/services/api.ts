@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE = 'https://twenty-cameras-smoke.loca.lt';
+const API_BASE = 'https://signalmap-production.up.railway.app';
 
 const api = axios.create({
   baseURL: API_BASE,
