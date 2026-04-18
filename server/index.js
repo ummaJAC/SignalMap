@@ -143,12 +143,37 @@ app.use('/api/auth', authRouter);
 // SignalMap Core Endpoints
 // ============================
 
+// Serve static Founder Dashboard
+app.use('/dashboard', express.static(join(__dirname, 'public')));
+
+// New endpoint specifically for the dashboard to pull raw data
+app.get('/api/admin/raw-data', requireAuth, async (req, res) => {
+    try {
+        const { data, error } = await supabaseAdmin.from('signal_readings').select('*').order('created_at', { ascending: false }).limit(500);
+        if (error) throw error;
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.post('/api/readings', requireAuth, async (req, res) => {
     try {
         const { lat, lng, carrier, technology, signalDbm, wifiCount } = req.body;
         const bounty = 0.001; 
         
-        // Log Agent Activity to dashboard
+        // 1. Save RAW telecom data to the Data Lake (for B2B sales)
+        await supabaseAdmin.from('signal_readings').insert([{
+            mapper_id: req.user.id,
+            lat,
+            lng,
+            carrier,
+            technology,
+            signal_dbm: signalDbm,
+            wifi_count: wifiCount || 0
+        }]);
+
+        // 2. Log Agent Activity to blockchain/agent_logs
         logAgentActivity('trust_receipt_minted', {
             status: 'success',
             agentId: 'mapper-oracle',
