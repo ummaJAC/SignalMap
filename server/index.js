@@ -1884,6 +1884,44 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                     return failReading(`db_update_failed:${readingError.message}`);
                 }
 
+                let rewardTxHash = null;
+                let rewardStatus = 'skipped';
+                let rewardError = null;
+                if (profile?.evm_address && wallet) {
+                    rewardStatus = 'pending';
+                    try {
+                        const rewardTx = await wallet.sendTransaction({
+                            to: profile.evm_address,
+                            value: ethers.parseEther(String(REWARD_PER_READING)),
+                        });
+                        const rewardReceipt = await rewardTx.wait();
+                        rewardTxHash = rewardReceipt.hash;
+                        rewardStatus = 'paid';
+                        console.log(`Signal reward paid: reading=${pendingReading.id} to=${profile.evm_address} amount=${REWARD_PER_READING} FLOW tx=${rewardTxHash}`);
+                    } catch (rewardErr) {
+                        rewardStatus = 'failed';
+                        rewardError = rewardErr.message || 'reward_payout_failed';
+                        console.error(`Signal reward failed: reading=${pendingReading.id} to=${profile.evm_address} error=${rewardError}`);
+                    }
+                } else if (!profile?.evm_address) {
+                    rewardError = 'no_profile_wallet';
+                } else if (!wallet) {
+                    rewardError = 'deployer_wallet_unavailable';
+                }
+
+                const rewardUpdate = await supabaseAdmin.from('signal_readings')
+                    .update({
+                        reward_tx_hash: rewardTxHash,
+                        reward_status: rewardStatus,
+                        reward_error: rewardError,
+                    })
+                    .eq('id', pendingReading.id);
+                if (rewardUpdate.error && /schema cache|column|Could not find/i.test(rewardUpdate.error.message || '')) {
+                    console.warn(`Reward metadata skipped until migration is applied: ${rewardUpdate.error.message}`);
+                } else if (rewardUpdate.error) {
+                    console.warn(`Reward metadata update failed: ${rewardUpdate.error.message}`);
+                }
+
                 if (profile) {
                     const newBalance = (profile.signal_balance || 0) + REWARD_PER_READING;
                     await supabaseAdmin.from('profiles')
@@ -1904,7 +1942,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                 const speedSourceLabel = speedSource || 'unknown';
                 const speedErrorLabel = speedError || 'none';
                 const signalLabel = signalDbm != null ? `${signalDbm}dBm` : 'n/a';
-                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} tech=${technology || networkType || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
+                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} tech=${technology || networkType || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} reward=${rewardStatus} rewardTx=${rewardTxHash || 'n/a'} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
             } catch (err) {
                 await failReading(`processing_failed:${err.message}`);
             }
@@ -1975,23 +2013,39 @@ app.get('/api/readings/:id/status', requireAuth, async (req, res) => {
         const readingId = req.params.id;
         const { data, error } = await supabaseAdmin
             .from('signal_readings')
-            .select('id, status, trust_receipt_id, trust_receipt_tx, error_message, bounty_paid, created_at')
+            .select('id, status, trust_receipt_id, trust_receipt_tx, error_message, bounty_paid, reward_tx_hash, reward_status, reward_error, created_at')
             .eq('id', readingId)
             .eq('user_id', userId)
             .single();
 
-        if (error || !data) {
+        let reading = data;
+        let readError = error;
+        if (readError && /schema cache|column|Could not find/i.test(readError.message || '')) {
+            const retry = await supabaseAdmin
+                .from('signal_readings')
+                .select('id, status, trust_receipt_id, trust_receipt_tx, error_message, bounty_paid, created_at')
+                .eq('id', readingId)
+                .eq('user_id', userId)
+                .single();
+            reading = retry.data;
+            readError = retry.error;
+        }
+
+        if (readError || !reading) {
             return res.status(404).json({ error: 'Reading not found' });
         }
         return res.json({
             success: true,
-            readingId: data.id,
-            status: data.status || 'pending',
-            trustReceiptId: data.trust_receipt_id,
-            trustReceiptTx: data.trust_receipt_tx,
-            errorMessage: data.error_message,
-            bountyPaid: data.bounty_paid || 0,
-            createdAt: data.created_at,
+            readingId: reading.id,
+            status: reading.status || 'pending',
+            trustReceiptId: reading.trust_receipt_id,
+            trustReceiptTx: reading.trust_receipt_tx,
+            rewardTxHash: reading.reward_tx_hash || null,
+            rewardStatus: reading.reward_status || 'skipped',
+            rewardError: reading.reward_error || null,
+            errorMessage: reading.error_message,
+            bountyPaid: reading.bounty_paid || 0,
+            createdAt: reading.created_at,
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -2089,6 +2143,18 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
             .eq('user_id', userId);
         if (readingsError) throw readingsError;
 
+        let lastReward = null;
+        const { data: rewardRows, error: rewardError } = await supabaseAdmin
+            .from('signal_readings')
+            .select('id, reward_tx_hash, reward_status, reward_error, created_at')
+            .eq('user_id', userId)
+            .not('reward_status', 'is', null)
+            .order('created_at', { ascending: false })
+            .limit(1);
+        if (!rewardError && rewardRows?.length) {
+            lastReward = rewardRows[0];
+        }
+
         const { data: profile } = await supabaseAdmin
             .from('profiles')
             .select('signal_balance, evm_address')
@@ -2119,6 +2185,7 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
             failedReadings,
             flowBalance,
             evmAddress: profile?.evm_address || null,
+            lastReward,
         });
     } catch (error) {
         res.status(500).json({ error: error.message });

@@ -29,34 +29,36 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
         "ACCESS_NETWORK_STATE",
         "ACCESS_WIFI_STATE",
         "READ_PHONE_STATE",
         "NEARBY_WIFI_DEVICES",
-        "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "POST_NOTIFICATIONS"
       ],
       "package": "com.knayx.signalmap"
     },
     "plugins": [
-      "expo-location",
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "SignalMap needs background location to keep mapping coverage while the screen is off.",
+          "locationAlwaysPermission": "SignalMap needs background location to keep mapping coverage while the screen is off.",
+          "locationWhenInUsePermission": "SignalMap needs location to map network coverage."
+        }
+      ],
       [
         "@rnmapbox/maps",
         {
           "RNMapboxImpl": "mapbox",
           "RNMapboxDownloadToken": "YOUR_MAPBOX_DOWNLOAD_TOKEN"
         }
-      ]
+      ],
+      "expo-web-browser"
     ],
     "extra": {
       "eas": {

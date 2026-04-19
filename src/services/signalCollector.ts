@@ -77,7 +77,17 @@ export async function collectBaseSignalData(): Promise<RawSignalData | null> {
   try {
     const loc = await getCurrentLocation();
     if (!loc) return null;
+    return collectBaseSignalDataForLocation(loc);
+  } catch (err) {
+    console.error('Base signal collection error:', err);
+    return null;
+  }
+}
 
+export async function collectBaseSignalDataForLocation(
+  loc: { lat: number; lng: number; accuracy: number }
+): Promise<RawSignalData | null> {
+  try {
     const netInfo = await NetInfo.fetch();
     const nativeTelemetry = await getNativeTelemetrySnapshot();
     const base = normalizeBaseTelemetry(loc, netInfo, nativeTelemetry);

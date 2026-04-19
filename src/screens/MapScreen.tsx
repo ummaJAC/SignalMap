@@ -14,6 +14,7 @@ import {
   stopLocationWatcher,
 } from '../services/signalCollector';
 import { sendReading, getMapperStats, getReadingStatus, updateReadingTelemetry } from '../services/api';
+import { startBackgroundMapping, stopBackgroundMapping } from '../services/backgroundMapping';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
 const DEFAULT_CENTER = [121.4737, 31.2304];
@@ -35,7 +36,7 @@ export default function MapScreen() {
     addReading,
     signalBalance,
     totalReadings,
-    setBalances,
+    setStats,
     setLastKnownLocation,
     lastKnownLocation,
   } = useMapperStore();
@@ -69,10 +70,10 @@ export default function MapScreen() {
             setMappingStatus('Backend failed');
             console.warn(`Reading ${readingId} failed in backend: ${statusRes?.errorMessage || 'unknown'}`);
           } else {
-            setMappingStatus('Confirmed');
+            setMappingStatus(statusRes?.rewardStatus === 'paid' ? 'Confirmed + reward paid' : 'Confirmed');
             try {
               const stats = await getMapperStats();
-              setBalances(stats.signalBalance, parseFloat(stats.flowBalance));
+              setStats(stats);
             } catch {}
           }
           return;
@@ -82,7 +83,7 @@ export default function MapScreen() {
       }
       await sleep(5000);
     }
-  }, [setBalances]);
+  }, [setStats]);
 
   useEffect(() => {
     Mapbox.setAccessToken(MAPBOX_TOKEN).then(() => {
@@ -220,7 +221,8 @@ export default function MapScreen() {
             if (!mountedRef.current) return;
             const enriched = mergeQualityIntoReading(data, quality);
             setLastKnownLocation(enriched);
-            setMappingStatus(quality.speedError ? 'Speed probe failed' : 'Quality uploaded');
+            const hasUsableQuality = quality.speedDown != null || quality.latencyMs != null;
+            setMappingStatus(hasUsableQuality ? 'Quality OK' : 'Speed probe failed');
 
             if (result.readingId) {
               try {
@@ -266,10 +268,16 @@ export default function MapScreen() {
       });
 
       void collectAndSend();
+      void startBackgroundMapping().then((ok) => {
+        if (!ok) {
+          console.warn('Background mapping permission unavailable. Foreground mapping still active.');
+        }
+      }).catch((err) => console.warn('Background mapping start failed:', err));
       intervalRef.current = setInterval(() => void collectAndSend(), 30000);
     } else {
       setMappingStatus('Waiting for next sample');
       stopLocationWatcher();
+      void stopBackgroundMapping().catch((err) => console.warn('Background mapping stop failed:', err));
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -278,6 +286,7 @@ export default function MapScreen() {
 
     return () => {
       stopLocationWatcher();
+      void stopBackgroundMapping().catch(() => {});
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [collectAndSend, isMapping, setLastKnownLocation]);
@@ -286,9 +295,9 @@ export default function MapScreen() {
     if (!token) return;
     try {
       const stats = await getMapperStats();
-      setBalances(stats.signalBalance, parseFloat(stats.flowBalance));
+      setStats(stats);
     } catch {}
-  }, [setBalances, token]);
+  }, [setStats, token]);
 
   useEffect(() => {
     if (token) {
@@ -303,6 +312,8 @@ export default function MapScreen() {
     if (dbm > -90) return '#FACC15';
     return '#EF4444';
   };
+
+  const hasUsableQuality = lastKnownLocation?.speedDown != null || lastKnownLocation?.latencyMs != null;
 
   const geojson: GeoJSON.FeatureCollection = {
     type: 'FeatureCollection',
@@ -420,14 +431,18 @@ export default function MapScreen() {
                 </Text>
               </View>
               <View style={styles.hudRow}>
-                <Text style={styles.hudLabel}>LATENCY / UPLOAD</Text>
+                <Text style={styles.hudLabel}>LATENCY</Text>
                 <Text style={styles.hudValue}>
                   {lastKnownLocation.latencyMs != null ? `${lastKnownLocation.latencyMs} ms` : 'n/a'}
-                  {' / '}
+                </Text>
+              </View>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>UPLOAD SAMPLE</Text>
+                <Text style={styles.hudValue}>
                   {lastKnownLocation.speedUp != null ? `${lastKnownLocation.speedUp} Mbps` : 'n/a'}
                 </Text>
               </View>
-              {lastKnownLocation.speedError ? (
+              {lastKnownLocation.speedError && !hasUsableQuality ? (
                 <View style={styles.hudRow}>
                   <Text style={styles.hudLabel}>SPEED ERROR</Text>
                   <Text style={[styles.hudValue, { color: '#B91C1C', fontSize: 11 }]}>
@@ -435,6 +450,9 @@ export default function MapScreen() {
                   </Text>
                 </View>
               ) : null}
+              <Text style={styles.hintText}>
+                Huawei/Honor: allow unrestricted battery for background mapping.
+              </Text>
             </View>
           )}
         </>
@@ -495,6 +513,7 @@ const styles = StyleSheet.create({
   hudRow: { marginBottom: 8 },
   hudLabel: { fontSize: 9, fontWeight: '700', color: '#94A3B8', marginBottom: 2 },
   hudValue: { fontSize: 13, fontWeight: '900', color: '#0F172A' },
+  hintText: { fontSize: 9, fontWeight: '700', color: '#64748B', lineHeight: 13, marginTop: 2 },
   bottomBar: {
     position: 'absolute', bottom: 40, left: 16, right: 16,
   },

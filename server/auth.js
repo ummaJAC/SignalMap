@@ -70,15 +70,16 @@ router.post('/send-otp', async (req, res) => {
 // ── 2. Verify OTP and login/register ──
 router.post('/verify-otp', async (req, res) => {
     try {
-        const { email, code } = req.body;
-        if (!email || !code) return res.status(400).json({ error: 'Email and code are required' });
+        const { email, code, otp } = req.body;
+        const token = code || otp;
+        if (!email || !token) return res.status(400).json({ error: 'Email and code are required' });
 
         const normalizedEmail = email.toLowerCase().trim();
 
         // Verify the OTP with Supabase Auth
         const { data, error } = await supabaseAdmin.auth.verifyOtp({
             email: normalizedEmail,
-            token: code,
+            token,
             type: 'email',
         });
 

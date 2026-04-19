@@ -11,8 +11,12 @@ const api = axios.create({
   },
 });
 
-export function setAuthToken(token: string) {
-  api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+export function setAuthToken(token: string | null) {
+  if (token) {
+    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  } else {
+    delete api.defaults.headers.common['Authorization'];
+  }
 }
 
 export async function sendReading(data: {
@@ -83,7 +87,17 @@ export async function login(email: string) {
 }
 
 export async function verifyOtp(email: string, otp: string) {
-  const res = await api.post('/api/auth/verify-otp', { email, otp });
+  const res = await api.post('/api/auth/verify-otp', { email, code: otp, otp });
+  return res.data;
+}
+
+export async function googleLogin(credential: string) {
+  const res = await api.post('/api/auth/google', { credential });
+  return res.data;
+}
+
+export async function exportPrivateKey() {
+  const res = await api.get('/api/auth/export-key');
   return res.data;
 }
 

@@ -82,38 +82,63 @@ interface LastKnownLocation {
   timestamp?: number;
 }
 
+interface LastReward {
+  id?: string;
+  reward_tx_hash?: string | null;
+  reward_status?: string | null;
+  reward_error?: string | null;
+  created_at?: string;
+}
+
 interface MapperState {
   token: string | null;
+  email: string | null;
+  username: string | null;
   evmAddress: string | null;
   isMapping: boolean;
   readings: SignalReading[];
   totalReadings: number;
   signalBalance: number;
   flowBalance: number;
+  lastReward: LastReward | null;
   lastKnownLocation: LastKnownLocation | null;
 
-  setToken: (token: string) => void;
-  setEvmAddress: (addr: string) => void;
+  setToken: (token: string | null) => void;
+  setUser: (user: { email?: string | null; username?: string | null; evm_address?: string | null; evmAddress?: string | null }) => void;
+  setEvmAddress: (addr: string | null) => void;
   setIsMapping: (val: boolean) => void;
   addReading: (r: SignalReading) => void;
   setBalances: (signal: number, flow: number) => void;
+  setStats: (stats: { signalBalance?: number; flowBalance?: string | number; readings?: number; evmAddress?: string | null; lastReward?: LastReward | null }) => void;
   setLastKnownLocation: (loc: LastKnownLocation) => void;
   reset: () => void;
 }
 
+const initialState = {
+  token: null,
+  email: null,
+  username: null,
+  evmAddress: null,
+  isMapping: false,
+  readings: [] as SignalReading[],
+  totalReadings: 0,
+  signalBalance: 0,
+  flowBalance: 0,
+  lastReward: null as LastReward | null,
+  lastKnownLocation: null as LastKnownLocation | null,
+};
+
 const useMapperStore = create<MapperState>()(
   persist(
     (set) => ({
-      token: 'dev-token-hackathon-2026',
-      evmAddress: null,
-      isMapping: false,
-      readings: [],
-      totalReadings: 0,
-      signalBalance: 0,
-      flowBalance: 0,
-      lastKnownLocation: null,
+      ...initialState,
 
       setToken: (token) => set({ token }),
+      setUser: (user) => set({
+        email: user.email ?? null,
+        username: user.username ?? null,
+        evmAddress: user.evm_address ?? user.evmAddress ?? null,
+      }),
       setEvmAddress: (evmAddress) => set({ evmAddress }),
       setIsMapping: (isMapping) => set({ isMapping }),
       addReading: (r) => set((s) => ({
@@ -122,15 +147,25 @@ const useMapperStore = create<MapperState>()(
         signalBalance: s.signalBalance + r.bounty,
       })),
       setBalances: (signalBalance, flowBalance) => set({ signalBalance, flowBalance }),
+      setStats: (stats) => set((s) => ({
+        signalBalance: stats.signalBalance ?? s.signalBalance,
+        flowBalance: stats.flowBalance != null ? parseFloat(String(stats.flowBalance)) : s.flowBalance,
+        totalReadings: stats.readings ?? s.totalReadings,
+        evmAddress: stats.evmAddress ?? s.evmAddress,
+        lastReward: stats.lastReward ?? s.lastReward,
+      })),
       setLastKnownLocation: (lastKnownLocation) => set({ lastKnownLocation }),
-      reset: () => set({
-        token: null, evmAddress: null, isMapping: false,
-        readings: [], totalReadings: 0, signalBalance: 0, flowBalance: 0,
-      }),
+      reset: () => set({ ...initialState }),
     }),
-    { 
+    {
       name: 'signalmap-state',
-      storage: createJSONStorage(() => AsyncStorage)
+      storage: createJSONStorage(() => AsyncStorage),
+      version: 2,
+      migrate: (persisted: any) => {
+        if (!persisted) return initialState;
+        if (persisted?.state?.token?.startsWith?.('dev-token-')) return initialState;
+        return persisted.state || persisted;
+      },
     }
   )
 );
