@@ -4,7 +4,7 @@ const API_BASE = 'https://signalmap-production.up.railway.app';
 
 const api = axios.create({
   baseURL: API_BASE,
-  timeout: 10000,
+  timeout: 90000,
   headers: { 
     'Content-Type': 'application/json',
     'Bypass-Tunnel-Reminder': 'true'
@@ -28,6 +28,11 @@ export async function sendReading(data: {
   speedError?: string | null;
 }) {
   const res = await api.post('/api/readings', data);
+  return res.data;
+}
+
+export async function getReadingStatus(readingId: string) {
+  const res = await api.get(`/api/readings/${readingId}/status`);
   return res.data;
 }
 

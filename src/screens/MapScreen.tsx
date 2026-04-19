@@ -6,7 +6,7 @@ import {
 import Mapbox from '@rnmapbox/maps';
 import useMapperStore from '../store/useMapperStore';
 import { collectSignalData, requestPermissions, startLocationWatcher, stopLocationWatcher } from '../services/signalCollector';
-import { sendReading, getMapperStats } from '../services/api';
+import { sendReading, getMapperStats, getReadingStatus } from '../services/api';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
 const DEFAULT_CENTER = [121.4737, 31.2304];
@@ -20,6 +20,39 @@ export default function MapScreen() {
   const [mapReady, setMapReady] = useState(false);
   const cameraRef = useRef<Mapbox.Camera>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const pollReadingUntilFinal = useCallback(async (readingId: string) => {
+    for (let attempt = 0; attempt < 24; attempt++) {
+      if (!mountedRef.current) return;
+      try {
+        const statusRes = await getReadingStatus(readingId);
+        const status = statusRes?.status;
+        if (status === 'confirmed' || status === 'failed') {
+          if (status === 'failed') {
+            console.warn(`Reading ${readingId} failed in backend: ${statusRes?.errorMessage || 'unknown'}`);
+          } else {
+            try {
+              const stats = await getMapperStats();
+              setBalances(stats.signalBalance, parseFloat(stats.flowBalance));
+            } catch {}
+          }
+          return;
+        }
+      } catch (err) {
+        console.warn(`Reading status poll error for ${readingId}:`, err);
+      }
+      await sleep(5000);
+    }
+  }, [setBalances]);
 
   useEffect(() => {
     Mapbox.setAccessToken(MAPBOX_TOKEN).then(() => {
@@ -65,7 +98,7 @@ export default function MapScreen() {
 
           if (result.success) {
             addReading({
-              id: String(Date.now()),
+              id: String(result.readingId || result.reading?.id || Date.now()),
               lat: data.lat,
               lng: data.lng,
               carrier: data.carrier,
@@ -87,6 +120,10 @@ export default function MapScreen() {
               carrier: data.carrier,
               technology: data.technology,
             }].slice(-200));
+
+            if (result.pending && result.readingId) {
+              void pollReadingUntilFinal(String(result.readingId));
+            }
           }
         } catch (err) {
           console.error('Sending reading failed:', err);
