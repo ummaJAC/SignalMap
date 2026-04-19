@@ -25,6 +25,9 @@ android/app/build/
 android/.gradle/
 android/.idea/
 android/local.properties
+android/app/src/main/assets/
+android/app/src/main/res/drawable-*/node_modules_*.png
+android/app/src/main/res/raw/keep.xml
 
 # Signing keys
 *.jks

@@ -254,7 +254,7 @@ function logAgentActivity(stage, data) {
             stage,
             label: entry.label,
             status: entry.status,
-            data: JSON.stringify(data),
+            data: data ?? {},
             created_at: entry.timestamp,
         })
         .then(({ error }) => {
