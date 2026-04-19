@@ -251,6 +251,7 @@ function logAgentActivity(stage, data) {
         .from('agent_logs')
         .insert({
             log_id: entry.id,
+            action_type: stage,
             stage,
             label: entry.label,
             status: entry.status,
