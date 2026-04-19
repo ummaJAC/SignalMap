@@ -1805,7 +1805,9 @@ app.post('/api/readings', requireAuth, async (req, res) => {
             description: `Signal: ${carrier || '?'} ${technology || '?'} ${signalDbm || '?'}dBm`,
         });
 
-        console.log(`Reading saved: ${carrier}/${technology}/${signalDbm}dBm @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW`);
+        const speedLabel = speedDown != null ? `${speedDown}Mbps` : 'n/a';
+        const signalLabel = signalDbm != null ? `${signalDbm}dBm` : 'n/a';
+        console.log(`Reading saved: carrier=${carrier || 'Unknown'} tech=${technology || 'Unknown'} signal=${signalLabel} speedDown=${speedLabel} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW`);
 
         res.json({
             success: true,
