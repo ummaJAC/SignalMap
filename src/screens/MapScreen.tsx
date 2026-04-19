@@ -59,6 +59,8 @@ export default function MapScreen() {
             wifiCount: data.wifiCount,
             speedDown: data.speedDown,
             speedUp: data.speedUp,
+            speedSource: data.speedSource,
+            speedError: data.speedError,
           });
 
           if (result.success) {
@@ -72,6 +74,8 @@ export default function MapScreen() {
               wifiCount: data.wifiCount,
               speedDown: data.speedDown,
               speedUp: data.speedUp,
+              speedSource: data.speedSource,
+              speedError: data.speedError,
               bounty: result.bounty,
               trustReceiptId: result.trustReceipt?.id || null,
               createdAt: new Date().toISOString(),
@@ -226,6 +230,14 @@ export default function MapScreen() {
                   {lastKnownLocation.speedDown != null ? `${lastKnownLocation.speedDown} Mbps` : 'n/a'}
                 </Text>
               </View>
+              {lastKnownLocation.speedError ? (
+                <View style={styles.hudRow}>
+                  <Text style={styles.hudLabel}>SPEED ERROR</Text>
+                  <Text style={[styles.hudValue, { color: '#B91C1C', fontSize: 11 }]}>
+                    {lastKnownLocation.speedError}
+                  </Text>
+                </View>
+              ) : null}
             </View>
           )}
         </>

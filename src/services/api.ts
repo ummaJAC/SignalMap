@@ -24,6 +24,8 @@ export async function sendReading(data: {
   wifiCount: number;
   speedDown?: number | null;
   speedUp?: number | null;
+  speedSource?: string | null;
+  speedError?: string | null;
 }) {
   const res = await api.post('/api/readings', data);
   return res.data;

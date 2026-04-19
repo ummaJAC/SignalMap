@@ -12,6 +12,8 @@ interface SignalReading {
   wifiCount: number;
   speedDown?: number | null;
   speedUp?: number | null;
+  speedSource?: string | null;
+  speedError?: string | null;
   bounty: number;
   trustReceiptId: number | null;
   createdAt: string;
@@ -26,6 +28,8 @@ interface LastKnownLocation {
   wifiCount?: number;
   speedDown?: number | null;
   speedUp?: number | null;
+  speedSource?: string | null;
+  speedError?: string | null;
   accuracy?: number;
   timestamp?: number;
 }

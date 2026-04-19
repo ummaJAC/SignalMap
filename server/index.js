@@ -1679,7 +1679,7 @@ if (existsSync(distPath)) {
 app.post('/api/readings', requireAuth, async (req, res) => {
     try {
         const userId = req.user.id;
-        const { lat, lng, carrier, technology, signalDbm, wifiCount, speedDown, speedUp } = req.body;
+        const { lat, lng, carrier, technology, signalDbm, wifiCount, speedDown, speedUp, speedSource, speedError } = req.body;
 
         if (!lat || !lng) {
             return res.status(400).json({ error: 'lat and lng required' });
@@ -1708,6 +1708,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
             speed_down: speedDown || null,
             speed_up: speedUp || null,
             status: 'pending',
+            error_message: speedError ? `speed_probe:${speedError}` : null,
             bounty_paid: 0,
         }).select().single();
 
@@ -1782,7 +1783,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                 trust_receipt_id: trustReceiptId,
                 trust_receipt_tx: trustReceiptTx,
                 status: 'confirmed',
-                error_message: null,
+                error_message: speedError ? `speed_probe:${speedError}` : null,
                 bounty_paid: REWARD_PER_READING,
             })
             .eq('id', pendingReading.id)
@@ -1806,8 +1807,10 @@ app.post('/api/readings', requireAuth, async (req, res) => {
         });
 
         const speedLabel = speedDown != null ? `${speedDown}Mbps` : 'n/a';
+        const speedSourceLabel = speedSource || 'unknown';
+        const speedErrorLabel = speedError || 'none';
         const signalLabel = signalDbm != null ? `${signalDbm}dBm` : 'n/a';
-        console.log(`Reading saved: carrier=${carrier || 'Unknown'} tech=${technology || 'Unknown'} signal=${signalLabel} speedDown=${speedLabel} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW`);
+        console.log(`Reading saved: carrier=${carrier || 'Unknown'} tech=${technology || 'Unknown'} signal=${signalLabel} speedDown=${speedLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW`);
 
         res.json({
             success: true,
