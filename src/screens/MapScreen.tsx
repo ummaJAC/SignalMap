@@ -94,6 +94,30 @@ export default function MapScreen() {
             speedUp: data.speedUp,
             speedSource: data.speedSource,
             speedError: data.speedError,
+            latencyMs: data.latencyMs,
+            networkType: data.networkType,
+            simOperator: data.simOperator,
+            networkOperator: data.networkOperator,
+            mcc: data.mcc,
+            mnc: data.mnc,
+            cellId: data.cellId,
+            tac: data.tac,
+            lac: data.lac,
+            pci: data.pci,
+            psc: data.psc,
+            rsrp: data.rsrp,
+            rsrq: data.rsrq,
+            sinr: data.sinr,
+            asuLevel: data.asuLevel,
+            dbm: data.dbm,
+            isRegistered: data.isRegistered,
+            wifiSsid: data.wifiSsid,
+            wifiBssid: data.wifiBssid,
+            wifiRssi: data.wifiRssi,
+            wifiLinkSpeedMbps: data.wifiLinkSpeedMbps,
+            wifiFrequencyMhz: data.wifiFrequencyMhz,
+            wifiIpAddress: data.wifiIpAddress,
+            telemetryRaw: data.telemetryRaw,
           });
 
           if (result.success) {
@@ -109,6 +133,30 @@ export default function MapScreen() {
               speedUp: data.speedUp,
               speedSource: data.speedSource,
               speedError: data.speedError,
+              latencyMs: data.latencyMs,
+              networkType: data.networkType,
+              simOperator: data.simOperator,
+              networkOperator: data.networkOperator,
+              mcc: data.mcc,
+              mnc: data.mnc,
+              cellId: data.cellId,
+              tac: data.tac,
+              lac: data.lac,
+              pci: data.pci,
+              psc: data.psc,
+              rsrp: data.rsrp,
+              rsrq: data.rsrq,
+              sinr: data.sinr,
+              asuLevel: data.asuLevel,
+              dbm: data.dbm,
+              isRegistered: data.isRegistered,
+              wifiSsid: data.wifiSsid,
+              wifiBssid: data.wifiBssid,
+              wifiRssi: data.wifiRssi,
+              wifiLinkSpeedMbps: data.wifiLinkSpeedMbps,
+              wifiFrequencyMhz: data.wifiFrequencyMhz,
+              wifiIpAddress: data.wifiIpAddress,
+              telemetryRaw: data.telemetryRaw,
               bounty: result.bounty,
               trustReceiptId: result.trustReceipt?.id || null,
               createdAt: new Date().toISOString(),
@@ -252,6 +300,12 @@ export default function MapScreen() {
                 <Text style={styles.hudLabel}>NETWORK TECH</Text>
                 <Text style={styles.hudValue}>{lastKnownLocation.technology || 'LTE'}</Text>
               </View>
+              {lastKnownLocation.wifiSsid ? (
+                <View style={styles.hudRow}>
+                  <Text style={styles.hudLabel}>WI-FI SSID</Text>
+                  <Text style={styles.hudValue}>{lastKnownLocation.wifiSsid}</Text>
+                </View>
+              ) : null}
               <View style={styles.hudRow}>
                 <Text style={styles.hudLabel}>SIGNAL STRENGTH</Text>
                 <Text style={[
@@ -261,10 +315,26 @@ export default function MapScreen() {
                   {lastKnownLocation.signalDbm ?? 'n/a'} dBm
                 </Text>
               </View>
+              {(lastKnownLocation.rsrp != null || lastKnownLocation.sinr != null) ? (
+                <View style={styles.hudRow}>
+                  <Text style={styles.hudLabel}>RADIO QUALITY</Text>
+                  <Text style={styles.hudValue}>
+                    RSRP {lastKnownLocation.rsrp ?? 'n/a'} / SINR {lastKnownLocation.sinr ?? 'n/a'}
+                  </Text>
+                </View>
+              ) : null}
               <View style={styles.hudRow}>
                 <Text style={styles.hudLabel}>DOWNLOAD SAMPLE</Text>
                 <Text style={styles.hudValue}>
                   {lastKnownLocation.speedDown != null ? `${lastKnownLocation.speedDown} Mbps` : 'n/a'}
+                </Text>
+              </View>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>LATENCY / UPLOAD</Text>
+                <Text style={styles.hudValue}>
+                  {lastKnownLocation.latencyMs != null ? `${lastKnownLocation.latencyMs} ms` : 'n/a'}
+                  {' / '}
+                  {lastKnownLocation.speedUp != null ? `${lastKnownLocation.speedUp} Mbps` : 'n/a'}
                 </Text>
               </View>
               {lastKnownLocation.speedError ? (

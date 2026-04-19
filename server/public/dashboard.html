@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -9,22 +9,29 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
     <style>
-        body { background-color: #f8fafc; font-family: 'Inter', sans-serif; }
-        #map { height: 400px; border-radius: 12px; z-index: 1; }
-        .glass { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.2); }
+        body { background-color: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+        #map { height: 420px; border-radius: 12px; z-index: 1; }
     </style>
 </head>
 <body class="p-6">
     <div class="max-w-7xl mx-auto space-y-6">
-        <header class="flex justify-between items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+        <header class="flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
             <div>
                 <h1 class="text-3xl font-black text-slate-800 tracking-tight">SignalMap <span class="text-emerald-500">B2B Engine</span></h1>
-                <p class="text-slate-500 font-medium">Live Operator Coverage Aggregation</p>
+                <p class="text-slate-500 font-medium">Live operator-grade coverage telemetry</p>
             </div>
-            <div class="flex gap-4">
+            <div class="grid grid-cols-3 gap-4 w-full lg:w-auto">
                 <div class="text-right">
-                    <p class="text-sm text-slate-500 uppercase font-bold tracking-wider">Total Data Points</p>
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Total Points</p>
                     <p class="text-2xl font-black text-slate-800" id="stat-total">0</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Confirmed</p>
+                    <p class="text-2xl font-black text-emerald-600" id="stat-confirmed">0</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Avg Down</p>
+                    <p class="text-2xl font-black text-sky-600" id="stat-speed">0 Mbps</p>
                 </div>
             </div>
         </header>
@@ -33,11 +40,10 @@
             <div class="col-span-2 bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
                 <div id="map"></div>
             </div>
-            
+
             <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
                 <h3 class="text-lg font-bold text-slate-800 mb-4">Latest Raw Readings</h3>
-                <div class="flex-1 overflow-y-auto space-y-3" id="feed-container" style="max-height: 350px;">
-                    <!-- Feed items injected here -->
+                <div class="flex-1 overflow-y-auto space-y-3" id="feed-container" style="max-height: 380px;">
                     <p class="text-sm text-slate-400 text-center mt-10">Loading DePIN data...</p>
                 </div>
             </div>
@@ -45,57 +51,93 @@
     </div>
 
     <script>
-        // Use a mock token to fetch if not implemented full auth on dashboard
         const MOCK_TOKEN = 'dev-token-dashboard';
-        
+        let map;
+        let heatLayer;
+
+        function numberOrNull(value) {
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        function htmlEscape(value) {
+            return String(value ?? '').replace(/[&<>'"]/g, (ch) => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
+            }[ch]));
+        }
+
+        function initMap(points) {
+            if (!map) {
+                const first = points[0] || [31.2304, 121.4737, 0.5];
+                map = L.map('map').setView([first[0], first[1]], points.length ? 11 : 3);
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                    attribution: '&copy; OpenStreetMap &copy; CARTO'
+                }).addTo(map);
+            }
+            if (heatLayer) heatLayer.remove();
+            heatLayer = L.heatLayer(points, { radius: 20, blur: 15, maxZoom: 17 }).addTo(map);
+        }
+
         async function loadData() {
             try {
                 const res = await fetch('/api/admin/raw-data', {
                     headers: { 'Authorization': `Bearer ${MOCK_TOKEN}` }
                 });
-                const { data } = await res.json();
-                
+                const body = await res.json();
+                const data = body.data || [];
+
                 document.getElementById('stat-total').innerText = data.length;
+                document.getElementById('stat-confirmed').innerText = data.filter(d => d.status === 'confirmed').length;
+                const speedSamples = data.map(d => numberOrNull(d.speed_down)).filter(v => v != null);
+                const avgSpeed = speedSamples.length ? (speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length).toFixed(1) : '0';
+                document.getElementById('stat-speed').innerText = `${avgSpeed} Mbps`;
 
-                // Heatmap Data
-                const heatPoints = data.map(d => [d.lat, d.lng, Math.abs(d.signal_dbm || 90) / 100]);
-                
-                // Initialize Map
-                const map = L.map('map').setView([31.2304, 121.4737], 11);
-                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                    attribution: '&copy; OpenStreetMap &copy; CARTO'
-                }).addTo(map);
+                const heatPoints = data
+                    .filter(d => d.lat != null && d.lng != null)
+                    .map(d => [Number(d.lat), Number(d.lng), Math.abs(numberOrNull(d.signal_dbm) || 90) / 100]);
+                initMap(heatPoints);
 
-                L.heatLayer(heatPoints, {radius: 20, blur: 15, maxZoom: 17}).addTo(map);
-
-                // Feed
                 const feed = document.getElementById('feed-container');
                 feed.innerHTML = '';
-                data.slice(0, 15).forEach(d => {
-                    const color = d.signal_dbm > -85 ? 'text-emerald-500' : (d.signal_dbm > -105 ? 'text-amber-500' : 'text-red-500');
+                data.slice(0, 20).forEach(d => {
+                    const signal = numberOrNull(d.signal_dbm ?? d.dbm);
+                    const color = signal == null ? 'text-slate-500' : (signal > -85 ? 'text-emerald-500' : (signal > -105 ? 'text-amber-500' : 'text-red-500'));
                     const statusColor = d.status === 'confirmed' ? 'bg-emerald-100 text-emerald-700' : (d.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700');
-                    const tx = d.trust_receipt_tx ? `<a class="text-emerald-600 underline" href="https://evm-testnet.flowscan.io/tx/${d.trust_receipt_tx}" target="_blank" rel="noreferrer">tx</a>` : 'tx pending';
+                    const tx = d.trust_receipt_tx ? `<a class="text-emerald-600 underline" href="https://evm-testnet.flowscan.io/tx/${htmlEscape(d.trust_receipt_tx)}" target="_blank" rel="noreferrer">tx</a>` : 'tx pending';
+                    const operator = htmlEscape(d.network_operator || d.carrier || 'Unknown');
+                    const sim = htmlEscape(d.sim_operator || 'SIM n/a');
+                    const tech = htmlEscape(d.technology || d.network_type || 'N/A');
+                    const wifi = d.wifi_ssid ? ` · Wi-Fi: ${htmlEscape(d.wifi_ssid)}` : '';
+                    const quality = `down ${d.speed_down != null ? htmlEscape(d.speed_down) + ' Mbps' : 'n/a'} · up ${d.speed_up != null ? htmlEscape(d.speed_up) + ' Mbps' : 'n/a'} · latency ${d.latency_ms != null ? htmlEscape(d.latency_ms) + ' ms' : 'n/a'}`;
+                    const radio = `RSRP ${d.rsrp ?? 'n/a'} / RSRQ ${d.rsrq ?? 'n/a'} / SINR ${d.sinr ?? 'n/a'}`;
+                    const cell = `cell ${htmlEscape(d.cell_id || 'n/a')} · TAC/LAC ${d.tac ?? d.lac ?? 'n/a'} · PCI/PSC ${d.pci ?? d.psc ?? 'n/a'}`;
+
                     feed.innerHTML += `
-                        <div class="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center transition hover:bg-slate-100">
-                            <div>
-                                <p class="font-bold text-slate-700 text-sm">${d.carrier || 'Unknown'} <span class="text-xs bg-slate-200 px-2 py-0.5 rounded-full ml-1">${d.technology || 'N/A'}</span> <span class="text-xs px-2 py-0.5 rounded-full ml-1 ${statusColor}">${d.status || 'pending'}</span></p>
-                                <p class="text-xs text-slate-400 font-mono mt-1">${d.lat.toFixed(4)}, ${d.lng.toFixed(4)} � ${d.speed_down != null ? d.speed_down + ' Mbps' : 'speed n/a'}</p>
-                                <p class="text-[10px] text-slate-400 font-mono mt-1">receipt: ${d.trust_receipt_id || 'pending'} � ${tx}</p>
-                                ${d.error_message ? `<p class="text-[10px] text-red-500 font-mono mt-1">${d.error_message}</p>` : ''}
+                        <div class="p-3 bg-slate-50 rounded-xl border border-slate-100 transition hover:bg-slate-100">
+                            <div class="flex justify-between gap-3">
+                                <div>
+                                    <p class="font-bold text-slate-700 text-sm">${operator} <span class="text-xs bg-slate-200 px-2 py-0.5 rounded-full ml-1">${tech}</span> <span class="text-xs px-2 py-0.5 rounded-full ml-1 ${statusColor}">${htmlEscape(d.status || 'pending')}</span></p>
+                                    <p class="text-[11px] text-slate-500 font-mono mt-1">${sim}${wifi}</p>
+                                </div>
+                                <div class="font-black ${color} text-right">${signal ?? 'n/a'} dBm</div>
                             </div>
-                            <div class="font-black ${color} flex items-center gap-1">
-                                ${d.signal_dbm ?? 'n/a'} dBm
+                            <div class="mt-2">
+                                <p class="text-xs text-slate-500 font-mono">${Number(d.lat).toFixed(4)}, ${Number(d.lng).toFixed(4)} · ${quality}</p>
+                                <p class="text-xs text-slate-400 font-mono mt-1">${radio}</p>
+                                <p class="text-xs text-slate-400 font-mono mt-1">${cell}</p>
+                                <p class="text-[10px] text-slate-400 font-mono mt-1">receipt: ${htmlEscape(d.trust_receipt_id || 'pending')} · ${tx}</p>
+                                ${d.error_message ? `<p class="text-[10px] text-red-500 font-mono mt-1">${htmlEscape(d.error_message)}</p>` : ''}
                             </div>
                         </div>
                     `;
                 });
             } catch (err) {
-                console.error("Failed to load data", err);
+                console.error('Failed to load data', err);
             }
         }
-        
+
         loadData();
+        setInterval(loadData, 15000);
     </script>
 </body>
 </html>
-

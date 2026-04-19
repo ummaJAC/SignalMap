@@ -1,6 +1,6 @@
 import * as Location from 'expo-location';
 import * as NetInfo from '@react-native-community/netinfo';
-import { Platform, NativeModules } from 'react-native';
+import { PermissionsAndroid, Platform, NativeModules } from 'react-native';
 
 const { CellularInfo } = NativeModules;
 
@@ -15,6 +15,30 @@ export interface RawSignalData {
   speedUp: number | null;
   speedSource: string | null;
   speedError: string | null;
+  latencyMs: number | null;
+  networkType: string | null;
+  simOperator: string | null;
+  networkOperator: string | null;
+  mcc: string | null;
+  mnc: string | null;
+  cellId: number | string | null;
+  tac: number | null;
+  lac: number | null;
+  pci: number | null;
+  psc: number | null;
+  rsrp: number | null;
+  rsrq: number | null;
+  sinr: number | null;
+  asuLevel: number | null;
+  dbm: number | null;
+  isRegistered: boolean | null;
+  wifiSsid: string | null;
+  wifiBssid: string | null;
+  wifiRssi: number | null;
+  wifiLinkSpeedMbps: number | null;
+  wifiFrequencyMhz: number | null;
+  wifiIpAddress: string | null;
+  telemetryRaw: Record<string, any>;
   accuracy: number;
   timestamp: number;
 }
@@ -24,6 +48,20 @@ let locationSubscription: Location.LocationSubscription | null = null;
 export async function requestPermissions(): Promise<boolean> {
   const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
   if (fgStatus !== 'granted') return false;
+  if (Platform.OS === 'android') {
+    const optionalPermissions = [
+      PermissionsAndroid.PERMISSIONS.READ_PHONE_STATE,
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+      Platform.Version >= 33 ? 'android.permission.NEARBY_WIFI_DEVICES' : null,
+    ].filter(Boolean) as typeof PermissionsAndroid.PERMISSIONS[keyof typeof PermissionsAndroid.PERMISSIONS][];
+
+    try {
+      await PermissionsAndroid.requestMultiple(optionalPermissions);
+    } catch (error) {
+      console.warn('Optional telemetry permission request failed:', error);
+    }
+  }
   return true;
 }
 
@@ -52,15 +90,24 @@ export async function collectSignalData(): Promise<RawSignalData | null> {
     let carrier = 'Unknown';
     let technology = 'Unknown';
     let signalDbm: number | null = null;
+    let nativeTelemetry: Record<string, any> = {};
 
     if (Platform.OS === 'android' && CellularInfo) {
       try {
         const cellInfo = await CellularInfo.getCellularInfo();
+        nativeTelemetry = cellInfo || {};
         if (cellInfo.carrier) carrier = cellInfo.carrier;
+        if (cellInfo.networkOperatorName) carrier = cellInfo.networkOperatorName;
+        if ((!carrier || carrier === 'Unknown') && cellInfo.simOperatorName) carrier = cellInfo.simOperatorName;
         if (cellInfo.technology && cellInfo.technology !== 'Unknown') technology = cellInfo.technology;
+        if (cellInfo.cellularGeneration && cellInfo.cellularGeneration !== 'Unknown' && technology === 'Unknown') {
+          technology = cellInfo.cellularGeneration;
+        }
         if (cellInfo.signalDbm !== undefined) signalDbm = cellInfo.signalDbm;
+        if (signalDbm == null && cellInfo.dbm !== undefined) signalDbm = cellInfo.dbm;
       } catch (e) {
         console.error('CellularInfo Error:', e);
+        nativeTelemetry = { cellularError: String((e as any)?.message || e) };
       }
     }
 
@@ -85,7 +132,18 @@ export async function collectSignalData(): Promise<RawSignalData | null> {
       technology = netInfo.type.toUpperCase();
     }
 
-    const speedResult = await measureDownloadMbpsWithFallback();
+    const qualityResult = await measureNetworkQuality();
+    const telemetryRaw = {
+      netInfo: {
+        type: netInfo.type,
+        isConnected: netInfo.isConnected,
+        isInternetReachable: netInfo.isInternetReachable,
+        details: netInfo.details,
+      },
+      native: nativeTelemetry,
+      quality: qualityResult,
+      collectedAt: new Date().toISOString(),
+    };
 
     return {
       lat: loc.lat,
@@ -94,16 +152,72 @@ export async function collectSignalData(): Promise<RawSignalData | null> {
       technology,
       signalDbm,
       wifiCount: netInfo.type === 'wifi' ? 1 : 0,
-      speedDown: speedResult.speedDown,
-      speedUp: null,
-      speedSource: speedResult.speedSource,
-      speedError: speedResult.speedError,
+      speedDown: qualityResult.speedDown,
+      speedUp: qualityResult.speedUp,
+      speedSource: qualityResult.speedSource,
+      speedError: qualityResult.speedError,
+      latencyMs: qualityResult.latencyMs,
+      networkType: nativeTelemetry.networkType || netInfo.type || null,
+      simOperator: nativeTelemetry.simOperatorName || null,
+      networkOperator: nativeTelemetry.networkOperatorName || carrier || null,
+      mcc: nativeTelemetry.mcc || null,
+      mnc: nativeTelemetry.mnc || null,
+      cellId: nativeTelemetry.cellId ?? null,
+      tac: nativeTelemetry.tac ?? null,
+      lac: nativeTelemetry.lac ?? null,
+      pci: nativeTelemetry.pci ?? null,
+      psc: nativeTelemetry.psc ?? null,
+      rsrp: nativeTelemetry.rsrp ?? null,
+      rsrq: nativeTelemetry.rsrq ?? null,
+      sinr: nativeTelemetry.sinr ?? nativeTelemetry.rssnr ?? null,
+      asuLevel: nativeTelemetry.asuLevel ?? null,
+      dbm: nativeTelemetry.dbm ?? signalDbm,
+      isRegistered: nativeTelemetry.isRegistered ?? null,
+      wifiSsid: nativeTelemetry.wifiSsid || null,
+      wifiBssid: nativeTelemetry.wifiBssid || null,
+      wifiRssi: nativeTelemetry.wifiRssi ?? null,
+      wifiLinkSpeedMbps: nativeTelemetry.wifiLinkSpeedMbps ?? null,
+      wifiFrequencyMhz: nativeTelemetry.wifiFrequencyMhz ?? null,
+      wifiIpAddress: nativeTelemetry.wifiIpAddress || null,
+      telemetryRaw,
       accuracy: loc.accuracy,
       timestamp: Date.now(),
     };
   } catch (err) {
     console.error('Signal collection error:', err);
     return null;
+  }
+}
+
+async function measureNetworkQuality(): Promise<{
+  speedDown: number | null;
+  speedUp: number | null;
+  latencyMs: number | null;
+  speedSource: string | null;
+  speedError: string | null;
+}> {
+  const latency = await measureLatencyMs('https://speed.cloudflare.com/cdn-cgi/trace');
+  const download = await measureDownloadMbpsWithFallback();
+  const upload = await measureUploadMbps();
+
+  return {
+    speedDown: download.speedDown,
+    speedUp: upload.speedUp,
+    latencyMs: latency.latencyMs,
+    speedSource: [download.speedSource, upload.speedSource].filter(Boolean).join('+') || download.speedSource,
+    speedError: [latency.error, download.speedError, upload.speedError].filter(Boolean).join('|') || null,
+  };
+}
+
+async function measureLatencyMs(url: string): Promise<{ latencyMs: number | null; error: string | null }> {
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(`${url}?cacheBust=${Date.now()}`);
+    if (!res.ok) return { latencyMs: null, error: `latency:http_${res.status}` };
+    return { latencyMs: Date.now() - startedAt, error: null };
+  } catch (error: any) {
+    const message = String(error?.message || 'network_error').replace(/\s+/g, '_').toLowerCase();
+    return { latencyMs: null, error: `latency:${message}` };
   }
 }
 
@@ -150,6 +264,31 @@ async function measureProbeMbps(source: string, url: string): Promise<{
   } catch (error: any) {
     const message = String(error?.message || 'network_error').replace(/\s+/g, '_').toLowerCase();
     return { speedDown: null, speedSource: source, speedError: `${source}:${message}` };
+  }
+}
+
+async function measureUploadMbps(): Promise<{
+  speedUp: number | null;
+  speedSource: string | null;
+  speedError: string | null;
+}> {
+  const payload = 'signalmap-upload-probe-'.repeat(4096);
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(`https://speed.cloudflare.com/__up?cacheBust=${Date.now()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: payload,
+    });
+    if (!res.ok) {
+      return { speedUp: null, speedSource: 'cloudflare-upload', speedError: `upload:http_${res.status}` };
+    }
+    const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+    const mbps = Math.round((payload.length * 8 / elapsedSeconds / 1_000_000) * 10) / 10;
+    return { speedUp: mbps, speedSource: 'cloudflare-upload', speedError: null };
+  } catch (error: any) {
+    const message = String(error?.message || 'network_error').replace(/\s+/g, '_').toLowerCase();
+    return { speedUp: null, speedSource: 'cloudflare-upload', speedError: `upload:${message}` };
   }
 }
 

@@ -1679,7 +1679,42 @@ if (existsSync(distPath)) {
 app.post('/api/readings', requireAuth, async (req, res) => {
     try {
         const userId = req.user.id;
-        const { lat, lng, carrier, technology, signalDbm, wifiCount, speedDown, speedUp, speedSource, speedError } = req.body;
+        const {
+            lat,
+            lng,
+            carrier,
+            technology,
+            signalDbm,
+            wifiCount,
+            speedDown,
+            speedUp,
+            speedSource,
+            speedError,
+            latencyMs,
+            networkType,
+            simOperator,
+            networkOperator,
+            mcc,
+            mnc,
+            cellId,
+            tac,
+            lac,
+            pci,
+            psc,
+            rsrp,
+            rsrq,
+            sinr,
+            asuLevel,
+            dbm,
+            isRegistered,
+            wifiSsid,
+            wifiBssid,
+            wifiRssi,
+            wifiLinkSpeedMbps,
+            wifiFrequencyMhz,
+            wifiIpAddress,
+            telemetryRaw,
+        } = req.body;
 
         if (!lat || !lng) {
             return res.status(400).json({ error: 'lat and lng required' });
@@ -1687,20 +1722,67 @@ app.post('/api/readings', requireAuth, async (req, res) => {
 
         const REWARD_PER_READING = 0.001;
 
-        const { data: pendingReading, error: pendingError } = await supabaseAdmin.from('signal_readings').insert({
+        const baseReadingPayload = {
             user_id: userId,
             lat,
             lng,
             carrier: carrier || null,
             technology: technology || null,
-            signal_dbm: signalDbm || null,
-            wifi_count: wifiCount || 0,
-            speed_down: speedDown || null,
-            speed_up: speedUp || null,
+            signal_dbm: signalDbm ?? null,
+            wifi_count: wifiCount ?? 0,
+            speed_down: speedDown ?? null,
+            speed_up: speedUp ?? null,
             status: 'pending',
             error_message: speedError ? `speed_probe:${speedError}` : null,
             bounty_paid: 0,
-        }).select().single();
+        };
+
+        const extendedReadingPayload = {
+            ...baseReadingPayload,
+            network_type: networkType || null,
+            sim_operator: simOperator || null,
+            network_operator: networkOperator || null,
+            mcc: mcc || null,
+            mnc: mnc || null,
+            cell_id: cellId != null ? String(cellId) : null,
+            tac: tac ?? null,
+            lac: lac ?? null,
+            pci: pci ?? null,
+            psc: psc ?? null,
+            rsrp: rsrp ?? null,
+            rsrq: rsrq ?? null,
+            sinr: sinr ?? null,
+            asu_level: asuLevel ?? null,
+            dbm: dbm ?? null,
+            is_registered: isRegistered ?? null,
+            wifi_ssid: wifiSsid || null,
+            wifi_bssid: wifiBssid || null,
+            wifi_rssi: wifiRssi ?? null,
+            wifi_link_speed: wifiLinkSpeedMbps ?? null,
+            wifi_frequency: wifiFrequencyMhz ?? null,
+            wifi_ip_address: wifiIpAddress || null,
+            latency_ms: latencyMs ?? null,
+            speed_source: speedSource || null,
+            speed_error: speedError || null,
+            telemetry_raw: telemetryRaw || null,
+        };
+
+        let { data: pendingReading, error: pendingError } = await supabaseAdmin
+            .from('signal_readings')
+            .insert(extendedReadingPayload)
+            .select()
+            .single();
+
+        if (pendingError && /schema cache|column|Could not find/i.test(pendingError.message || '')) {
+            console.warn(`Extended telemetry insert skipped, retrying base schema: ${pendingError.message}`);
+            const retry = await supabaseAdmin
+                .from('signal_readings')
+                .insert(baseReadingPayload)
+                .select()
+                .single();
+            pendingReading = retry.data;
+            pendingError = retry.error;
+        }
 
         if (pendingError) throw pendingError;
 
@@ -1812,10 +1894,12 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                 });
 
                 const speedLabel = speedDown != null ? `${speedDown}Mbps` : 'n/a';
+                const uploadLabel = speedUp != null ? `${speedUp}Mbps` : 'n/a';
+                const latencyLabel = latencyMs != null ? `${latencyMs}ms` : 'n/a';
                 const speedSourceLabel = speedSource || 'unknown';
                 const speedErrorLabel = speedError || 'none';
                 const signalLabel = signalDbm != null ? `${signalDbm}dBm` : 'n/a';
-                console.log(`Reading confirmed: id=${pendingReading.id} carrier=${carrier || 'Unknown'} tech=${technology || 'Unknown'} signal=${signalLabel} speedDown=${speedLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
+                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} tech=${technology || networkType || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
             } catch (err) {
                 await failReading(`processing_failed:${err.message}`);
             }
@@ -1860,7 +1944,7 @@ app.get('/api/coverage', async (req, res) => {
         const { bounds, carrier, technology } = req.query;
 
         let query = supabaseAdmin.from('signal_readings')
-            .select('lat, lng, carrier, technology, signal_dbm, wifi_count, created_at');
+            .select('lat, lng, carrier, network_operator, technology, network_type, signal_dbm, dbm, rsrp, wifi_count, created_at');
 
         if (carrier && carrier !== 'all') {
             query = query.eq('carrier', carrier);
@@ -1880,8 +1964,8 @@ app.get('/api/coverage', async (req, res) => {
             grid[key].lat += r.lat;
             grid[key].lng += r.lng;
             grid[key].count++;
-            grid[key].totalSignal += (r.signal_dbm || -100);
-            if (r.carrier) grid[key].carriers.add(r.carrier);
+            grid[key].totalSignal += (r.rsrp || r.signal_dbm || r.dbm || -100);
+            if (r.network_operator || r.carrier) grid[key].carriers.add(r.network_operator || r.carrier);
         }
 
         const heatmap = Object.values(grid).map(g => ({
