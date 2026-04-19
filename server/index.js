@@ -1940,16 +1940,26 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
     try {
         const userId = req.user.id;
 
-        const { count: readingCount } = await supabaseAdmin
+        const { data: readingRows, error: readingsError, count: readingCount } = await supabaseAdmin
             .from('signal_readings')
-            .select('*', { count: 'exact', head: true })
+            .select('status, bounty_paid', { count: 'exact' })
             .eq('user_id', userId);
+        if (readingsError) throw readingsError;
 
         const { data: profile } = await supabaseAdmin
             .from('profiles')
             .select('signal_balance, evm_address')
             .eq('id', userId)
             .single();
+
+        const readings = readingRows || [];
+        const confirmedReadings = readings.filter((reading) => reading.status === 'confirmed');
+        const pendingReadings = readings.filter((reading) => reading.status === 'pending').length;
+        const failedReadings = readings.filter((reading) => reading.status === 'failed').length;
+        const ledgerBalance = confirmedReadings.reduce((sum, reading) => (
+            sum + Number(reading.bounty_paid || 0)
+        ), 0);
+        const signalBalance = Math.round(ledgerBalance * 10000) / 10000;
 
         let flowBalance = '0';
         if (profile?.evm_address) {
@@ -1961,7 +1971,9 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
 
         res.json({
             readings: readingCount || 0,
-            signalBalance: profile?.signal_balance || 0,
+            signalBalance,
+            pendingReadings,
+            failedReadings,
             flowBalance,
             evmAddress: profile?.evm_address || null,
         });
