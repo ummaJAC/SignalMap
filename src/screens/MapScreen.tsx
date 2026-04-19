@@ -1,26 +1,54 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+﻿import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   StyleSheet, View, Text, TouchableOpacity, SafeAreaView,
-  StatusBar, Alert, Platform, PermissionsAndroid, ActivityIndicator,
+  StatusBar, Alert, ActivityIndicator,
 } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
 import useMapperStore from '../store/useMapperStore';
-import { collectSignalData, requestPermissions, startLocationWatcher, stopLocationWatcher } from '../services/signalCollector';
-import { sendReading, getMapperStats, getReadingStatus } from '../services/api';
+import {
+  collectBaseSignalData,
+  measureNetworkQuality,
+  mergeQualityIntoReading,
+  requestPermissions,
+  startLocationWatcher,
+  stopLocationWatcher,
+} from '../services/signalCollector';
+import { sendReading, getMapperStats, getReadingStatus, updateReadingTelemetry } from '../services/api';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
 const DEFAULT_CENTER = [121.4737, 31.2304];
 const STYLE_URL = 'mapbox://styles/mapbox/streets-v12';
 
+type LocalMapReading = {
+  lat: number;
+  lng: number;
+  signal: number;
+  carrier?: string;
+  technology?: string;
+};
+
 export default function MapScreen() {
-  const { token, isMapping, setIsMapping, addReading, signalBalance, totalReadings, setBalances, setLastKnownLocation, lastKnownLocation } = useMapperStore();
+  const {
+    token,
+    isMapping,
+    setIsMapping,
+    addReading,
+    signalBalance,
+    totalReadings,
+    setBalances,
+    setLastKnownLocation,
+    lastKnownLocation,
+  } = useMapperStore();
+
   const [center, setCenter] = useState(DEFAULT_CENTER);
-  const [readings, setReadings] = useState<any[]>([]);
+  const [readings, setReadings] = useState<LocalMapReading[]>([]);
   const [sending, setSending] = useState(false);
   const [mapReady, setMapReady] = useState(false);
+  const [mappingStatus, setMappingStatus] = useState('Waiting for next sample');
   const cameraRef = useRef<Mapbox.Camera>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const sendingRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -38,8 +66,10 @@ export default function MapScreen() {
         const status = statusRes?.status;
         if (status === 'confirmed' || status === 'failed') {
           if (status === 'failed') {
+            setMappingStatus('Backend failed');
             console.warn(`Reading ${readingId} failed in backend: ${statusRes?.errorMessage || 'unknown'}`);
           } else {
+            setMappingStatus('Confirmed');
             try {
               const stats = await getMapperStats();
               setBalances(stats.signalBalance, parseFloat(stats.flowBalance));
@@ -68,121 +98,177 @@ export default function MapScreen() {
     });
   }, []);
 
+  const collectAndSend = useCallback(async () => {
+    if (!token || sendingRef.current) return;
+
+    sendingRef.current = true;
+    setSending(true);
+    setMappingStatus('Collecting GPS');
+
+    try {
+      const data = await collectBaseSignalData();
+      if (!data) {
+        setMappingStatus('GPS unavailable');
+        return;
+      }
+
+      setLastKnownLocation(data);
+      setCenter([data.lng, data.lat]);
+      cameraRef.current?.setCamera({
+        centerCoordinate: [data.lng, data.lat],
+        zoomLevel: 14,
+        animationDuration: 500,
+      });
+
+      setMappingStatus('Uploading reading');
+      const result = await sendReading({
+        lat: data.lat,
+        lng: data.lng,
+        carrier: data.carrier,
+        technology: data.technology,
+        signalDbm: data.signalDbm,
+        wifiCount: data.wifiCount,
+        speedDown: data.speedDown,
+        speedUp: data.speedUp,
+        speedSource: data.speedSource,
+        speedError: data.speedError,
+        latencyMs: data.latencyMs,
+        networkType: data.networkType,
+        simOperator: data.simOperator,
+        networkOperator: data.networkOperator,
+        mcc: data.mcc,
+        mnc: data.mnc,
+        cellId: data.cellId,
+        tac: data.tac,
+        lac: data.lac,
+        pci: data.pci,
+        psc: data.psc,
+        rsrp: data.rsrp,
+        rsrq: data.rsrq,
+        sinr: data.sinr,
+        asuLevel: data.asuLevel,
+        dbm: data.dbm,
+        isRegistered: data.isRegistered,
+        wifiSsid: data.wifiSsid,
+        wifiBssid: data.wifiBssid,
+        wifiRssi: data.wifiRssi,
+        wifiLinkSpeedMbps: data.wifiLinkSpeedMbps,
+        wifiFrequencyMhz: data.wifiFrequencyMhz,
+        wifiIpAddress: data.wifiIpAddress,
+        telemetryRaw: data.telemetryRaw,
+      });
+
+      if (result.success) {
+        const readingId = String(result.readingId || result.reading?.id || Date.now());
+
+        addReading({
+          id: readingId,
+          lat: data.lat,
+          lng: data.lng,
+          carrier: data.carrier,
+          technology: data.technology,
+          signalDbm: data.signalDbm,
+          wifiCount: data.wifiCount,
+          speedDown: data.speedDown,
+          speedUp: data.speedUp,
+          speedSource: data.speedSource,
+          speedError: data.speedError,
+          latencyMs: data.latencyMs,
+          networkType: data.networkType,
+          simOperator: data.simOperator,
+          networkOperator: data.networkOperator,
+          mcc: data.mcc,
+          mnc: data.mnc,
+          cellId: data.cellId,
+          tac: data.tac,
+          lac: data.lac,
+          pci: data.pci,
+          psc: data.psc,
+          rsrp: data.rsrp,
+          rsrq: data.rsrq,
+          sinr: data.sinr,
+          asuLevel: data.asuLevel,
+          dbm: data.dbm,
+          isRegistered: data.isRegistered,
+          wifiSsid: data.wifiSsid,
+          wifiBssid: data.wifiBssid,
+          wifiRssi: data.wifiRssi,
+          wifiLinkSpeedMbps: data.wifiLinkSpeedMbps,
+          wifiFrequencyMhz: data.wifiFrequencyMhz,
+          wifiIpAddress: data.wifiIpAddress,
+          telemetryRaw: data.telemetryRaw,
+          bounty: result.bounty || 0,
+          trustReceiptId: result.trustReceipt?.id || null,
+          createdAt: new Date().toISOString(),
+        });
+
+        setReadings((prev) => [...prev, {
+          lat: data.lat,
+          lng: data.lng,
+          signal: data.signalDbm || data.rsrp || data.dbm || -100,
+          carrier: data.carrier,
+          technology: data.technology,
+        }].slice(-200));
+
+        setMappingStatus('Accepted, measuring speed');
+        if (result.pending && result.readingId) {
+          void pollReadingUntilFinal(String(result.readingId));
+        }
+
+        void measureNetworkQuality()
+          .then(async (quality) => {
+            if (!mountedRef.current) return;
+            const enriched = mergeQualityIntoReading(data, quality);
+            setLastKnownLocation(enriched);
+            setMappingStatus(quality.speedError ? 'Speed probe failed' : 'Quality uploaded');
+
+            if (result.readingId) {
+              try {
+                await updateReadingTelemetry(String(result.readingId), {
+                  speedDown: quality.speedDown,
+                  speedUp: quality.speedUp,
+                  speedSource: quality.speedSource,
+                  speedError: quality.speedError,
+                  latencyMs: quality.latencyMs,
+                  telemetryRaw: enriched.telemetryRaw,
+                });
+              } catch (err) {
+                console.warn(`Reading telemetry update failed for ${result.readingId}:`, err);
+              }
+            }
+          })
+          .catch((err) => {
+            console.warn('Network quality probe failed:', err);
+            setMappingStatus('Speed probe failed');
+          });
+      }
+    } catch (err) {
+      console.error('Sending reading failed:', err);
+      setMappingStatus('Upload failed');
+      Alert.alert('Upload failed', 'Signal data was collected, but the backend did not accept it.');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  }, [addReading, pollReadingUntilFinal, setLastKnownLocation, token]);
+
   useEffect(() => {
     if (isMapping) {
+      setMappingStatus('Waiting for next sample');
       startLocationWatcher((loc) => {
         setLastKnownLocation(loc);
         setCenter([loc.lng, loc.lat]);
-        cameraRef.current?.setCamera({ centerCoordinate: [loc.lng, loc.lat], zoomLevel: 14, animationDuration: 500 });
+        cameraRef.current?.setCamera({
+          centerCoordinate: [loc.lng, loc.lat],
+          zoomLevel: 14,
+          animationDuration: 500,
+        });
       });
 
-      const collectAndSend = async () => {
-        const data = await collectSignalData();
-        if (!data || !token) return;
-
-        setLastKnownLocation(data);
-        setSending(true);
-        try {
-          const result = await sendReading({
-            lat: data.lat,
-            lng: data.lng,
-            carrier: data.carrier,
-            technology: data.technology,
-            signalDbm: data.signalDbm,
-            wifiCount: data.wifiCount,
-            speedDown: data.speedDown,
-            speedUp: data.speedUp,
-            speedSource: data.speedSource,
-            speedError: data.speedError,
-            latencyMs: data.latencyMs,
-            networkType: data.networkType,
-            simOperator: data.simOperator,
-            networkOperator: data.networkOperator,
-            mcc: data.mcc,
-            mnc: data.mnc,
-            cellId: data.cellId,
-            tac: data.tac,
-            lac: data.lac,
-            pci: data.pci,
-            psc: data.psc,
-            rsrp: data.rsrp,
-            rsrq: data.rsrq,
-            sinr: data.sinr,
-            asuLevel: data.asuLevel,
-            dbm: data.dbm,
-            isRegistered: data.isRegistered,
-            wifiSsid: data.wifiSsid,
-            wifiBssid: data.wifiBssid,
-            wifiRssi: data.wifiRssi,
-            wifiLinkSpeedMbps: data.wifiLinkSpeedMbps,
-            wifiFrequencyMhz: data.wifiFrequencyMhz,
-            wifiIpAddress: data.wifiIpAddress,
-            telemetryRaw: data.telemetryRaw,
-          });
-
-          if (result.success) {
-            addReading({
-              id: String(result.readingId || result.reading?.id || Date.now()),
-              lat: data.lat,
-              lng: data.lng,
-              carrier: data.carrier,
-              technology: data.technology,
-              signalDbm: data.signalDbm,
-              wifiCount: data.wifiCount,
-              speedDown: data.speedDown,
-              speedUp: data.speedUp,
-              speedSource: data.speedSource,
-              speedError: data.speedError,
-              latencyMs: data.latencyMs,
-              networkType: data.networkType,
-              simOperator: data.simOperator,
-              networkOperator: data.networkOperator,
-              mcc: data.mcc,
-              mnc: data.mnc,
-              cellId: data.cellId,
-              tac: data.tac,
-              lac: data.lac,
-              pci: data.pci,
-              psc: data.psc,
-              rsrp: data.rsrp,
-              rsrq: data.rsrq,
-              sinr: data.sinr,
-              asuLevel: data.asuLevel,
-              dbm: data.dbm,
-              isRegistered: data.isRegistered,
-              wifiSsid: data.wifiSsid,
-              wifiBssid: data.wifiBssid,
-              wifiRssi: data.wifiRssi,
-              wifiLinkSpeedMbps: data.wifiLinkSpeedMbps,
-              wifiFrequencyMhz: data.wifiFrequencyMhz,
-              wifiIpAddress: data.wifiIpAddress,
-              telemetryRaw: data.telemetryRaw,
-              bounty: result.bounty,
-              trustReceiptId: result.trustReceipt?.id || null,
-              createdAt: new Date().toISOString(),
-            });
-
-            setReadings((prev) => [...prev, {
-              lat: data.lat, lng: data.lng,
-              signal: data.signalDbm || -100,
-              carrier: data.carrier,
-              technology: data.technology,
-            }].slice(-200));
-
-            if (result.pending && result.readingId) {
-              void pollReadingUntilFinal(String(result.readingId));
-            }
-          }
-        } catch (err) {
-          console.error('Sending reading failed:', err);
-          Alert.alert('Upload failed', 'Signal data was collected, but the backend did not accept it.');
-        }
-        setSending(false);
-      };
-
-      collectAndSend();
-      intervalRef.current = setInterval(collectAndSend, 30000);
+      void collectAndSend();
+      intervalRef.current = setInterval(() => void collectAndSend(), 30000);
     } else {
+      setMappingStatus('Waiting for next sample');
       stopLocationWatcher();
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
@@ -194,7 +280,7 @@ export default function MapScreen() {
       stopLocationWatcher();
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isMapping, token]);
+  }, [collectAndSend, isMapping, setLastKnownLocation]);
 
   const fetchStats = useCallback(async () => {
     if (!token) return;
@@ -202,7 +288,7 @@ export default function MapScreen() {
       const stats = await getMapperStats();
       setBalances(stats.signalBalance, parseFloat(stats.flowBalance));
     } catch {}
-  }, [token]);
+  }, [setBalances, token]);
 
   useEffect(() => {
     if (token) {
@@ -273,7 +359,7 @@ export default function MapScreen() {
       </Mapbox.MapView>
 
       <View style={styles.topBar}>
-        <Text style={styles.logo}>📡 SignalMap</Text>
+        <Text style={styles.logo}>SignalMap</Text>
         <View style={styles.balanceBadge}>
           <Text style={styles.balanceText}>{signalBalance.toFixed(4)} FLOW</Text>
           <Text style={styles.readingsText}>{totalReadings} readings</Text>
@@ -285,8 +371,12 @@ export default function MapScreen() {
           <View style={styles.statusBar}>
             <View style={styles.pulseDot} />
             <Text style={styles.statusText}>
-              MAPPING{sending ? ' • Sending...' : ''} • {readings.length} points
+              MAPPING{sending ? ' - Sending...' : ''} - {readings.length} points
             </Text>
+          </View>
+
+          <View style={styles.debugBar}>
+            <Text style={styles.debugText}>{mappingStatus}</Text>
           </View>
 
           {lastKnownLocation?.carrier && (
@@ -309,8 +399,8 @@ export default function MapScreen() {
               <View style={styles.hudRow}>
                 <Text style={styles.hudLabel}>SIGNAL STRENGTH</Text>
                 <Text style={[
-                  styles.hudValue, 
-                  {color: (lastKnownLocation.signalDbm ?? -120) > -85 ? '#10B981' : ((lastKnownLocation.signalDbm ?? -120) > -105 ? '#F59E0B' : '#EF4444')}
+                  styles.hudValue,
+                  { color: (lastKnownLocation.signalDbm ?? -120) > -85 ? '#10B981' : ((lastKnownLocation.signalDbm ?? -120) > -105 ? '#F59E0B' : '#EF4444') },
                 ]}>
                   {lastKnownLocation.signalDbm ?? 'n/a'} dBm
                 </Text>
@@ -357,7 +447,7 @@ export default function MapScreen() {
           activeOpacity={0.8}
         >
           <Text style={styles.mapButtonText}>
-            {isMapping ? '⏹ STOP MAPPING' : '📡 START MAPPING'}
+            {isMapping ? 'STOP MAPPING' : 'START MAPPING'}
           </Text>
         </TouchableOpacity>
       </View>
@@ -390,8 +480,13 @@ const styles = StyleSheet.create({
     width: 8, height: 8, borderRadius: 4, backgroundColor: '#F59E0B',
   },
   statusText: { fontSize: 11, fontWeight: '700', color: '#92400E' },
+  debugBar: {
+    position: 'absolute', top: 124, left: 16,
+    backgroundColor: 'rgba(15,23,42,0.72)', borderRadius: 10, paddingHorizontal: 10, paddingVertical: 4,
+  },
+  debugText: { fontSize: 10, fontWeight: '800', color: '#FFFFFF' },
   telemetryHud: {
-    position: 'absolute', top: 135, left: 16, width: 200,
+    position: 'absolute', top: 155, left: 16, width: 200,
     backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 16, padding: 16,
     borderWidth: 1, borderColor: '#E2E8F0',
     shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, elevation: 4,

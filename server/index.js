@@ -1786,6 +1786,11 @@ app.post('/api/readings', requireAuth, async (req, res) => {
 
         if (pendingError) throw pendingError;
 
+        const initialQualityStatus = speedDown != null || speedUp != null || latencyMs != null
+            ? 'ok'
+            : (speedError ? 'failed' : 'missing');
+        console.log(`Reading accepted: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} tech=${technology || networkType || 'Unknown'} quality=${initialQualityStatus} @ ${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`);
+
         res.status(202).json({
             success: true,
             accepted: true,
@@ -1906,6 +1911,60 @@ app.post('/api/readings', requireAuth, async (req, res) => {
         })();
     } catch (error) {
         console.error('Error saving reading:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/api/readings/:id/telemetry', requireAuth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const readingId = req.params.id;
+        const { speedDown, speedUp, speedSource, speedError, latencyMs, telemetryRaw } = req.body;
+
+        const extendedUpdate = {
+            speed_down: speedDown ?? null,
+            speed_up: speedUp ?? null,
+            latency_ms: latencyMs ?? null,
+            speed_source: speedSource || null,
+            speed_error: speedError || null,
+            telemetry_raw: telemetryRaw || null,
+        };
+
+        let { data, error } = await supabaseAdmin
+            .from('signal_readings')
+            .update(extendedUpdate)
+            .eq('id', readingId)
+            .eq('user_id', userId)
+            .select('id, speed_down, speed_up, latency_ms, speed_source, speed_error')
+            .single();
+
+        if (error && /schema cache|column|Could not find/i.test(error.message || '')) {
+            console.warn(`Extended telemetry update skipped, retrying base schema: ${error.message}`);
+            const retry = await supabaseAdmin
+                .from('signal_readings')
+                .update({
+                    speed_down: speedDown ?? null,
+                    speed_up: speedUp ?? null,
+                })
+                .eq('id', readingId)
+                .eq('user_id', userId)
+                .select('id, speed_down, speed_up')
+                .single();
+            data = retry.data;
+            error = retry.error;
+        }
+
+        if (error || !data) {
+            return res.status(404).json({ error: 'Reading not found' });
+        }
+
+        const qualityStatus = speedDown != null || speedUp != null || latencyMs != null
+            ? 'ok'
+            : (speedError ? 'failed' : 'missing');
+        console.log(`Reading quality updated: id=${readingId} quality=${qualityStatus} speedDown=${speedDown ?? 'n/a'} speedUp=${speedUp ?? 'n/a'} latency=${latencyMs ?? 'n/a'} source=${speedSource || 'unknown'} error=${speedError || 'none'}`);
+
+        return res.json({ success: true, reading: data });
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });

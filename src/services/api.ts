@@ -55,6 +55,18 @@ export async function sendReading(data: {
   return res.data;
 }
 
+export async function updateReadingTelemetry(readingId: string, data: {
+  speedDown?: number | null;
+  speedUp?: number | null;
+  speedSource?: string | null;
+  speedError?: string | null;
+  latencyMs?: number | null;
+  telemetryRaw?: Record<string, any>;
+}) {
+  const res = await api.patch(`/api/readings/${readingId}/telemetry`, data);
+  return res.data;
+}
+
 export async function getReadingStatus(readingId: string) {
   const res = await api.get(`/api/readings/${readingId}/status`);
   return res.data;
