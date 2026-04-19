@@ -11,6 +11,8 @@ export interface RawSignalData {
   technology: string;
   signalDbm: number | null;
   wifiCount: number;
+  speedDown: number | null;
+  speedUp: number | null;
   accuracy: number;
   timestamp: number;
 }
@@ -60,16 +62,28 @@ export async function collectSignalData(): Promise<RawSignalData | null> {
       }
     }
 
-    technology = netInfo.type?.toUpperCase() || technology;
-    if (netInfo.type === 'cellular') {
+    if (netInfo.type === 'wifi') {
+      technology = 'WiFi';
+    } else if (netInfo.type === 'cellular') {
       const cellType = (netInfo.details as any)?.cellularGeneration;
       if (cellType) {
         const techMap: Record<string, string> = {
-          '1': '2G', '2': '3G', '3': '4G/LTE', '4': '5G',
+          '2g': '2G',
+          '3g': '3G',
+          '4g': '4G/LTE',
+          '5g': '5G',
+          '1': '2G',
+          '2': '3G',
+          '3': '4G/LTE',
+          '4': '5G',
         };
-        technology = techMap[String(cellType)] || technology;
+        technology = techMap[String(cellType).toLowerCase()] || technology;
       }
+    } else if (technology === 'Unknown' && netInfo.type) {
+      technology = netInfo.type.toUpperCase();
     }
+
+    const speedDown = await measureDownloadMbps();
 
     return {
       lat: loc.lat,
@@ -78,11 +92,25 @@ export async function collectSignalData(): Promise<RawSignalData | null> {
       technology,
       signalDbm,
       wifiCount: netInfo.type === 'wifi' ? 1 : 0,
+      speedDown,
+      speedUp: null,
       accuracy: loc.accuracy,
       timestamp: Date.now(),
     };
   } catch (err) {
     console.error('Signal collection error:', err);
+    return null;
+  }
+}
+
+async function measureDownloadMbps(): Promise<number | null> {
+  const startedAt = Date.now();
+  try {
+    const res = await fetch(`https://speed.cloudflare.com/__down?bytes=200000&cacheBust=${startedAt}`);
+    const blob = await res.blob();
+    const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+    return Math.round((blob.size * 8 / elapsedSeconds / 1_000_000) * 10) / 10;
+  } catch {
     return null;
   }
 }

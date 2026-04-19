@@ -22,25 +22,11 @@ export async function sendReading(data: {
   technology: string;
   signalDbm: number | null;
   wifiCount: number;
-  speedDown?: number;
-  speedUp?: number;
+  speedDown?: number | null;
+  speedUp?: number | null;
 }) {
-  try {
-    const res = await api.post('/api/readings', data);
-    return res.data;
-  } catch (error: any) {
-    const errMsg = error?.response 
-      ? `HTTP ${error.response.status}: ${JSON.stringify(error.response.data)}`
-      : error?.message || 'Unknown error';
-    console.warn('🛡️ Safety Catch triggered. Reason:', errMsg);
-    console.warn('Attempted URL:', API_BASE + '/api/readings');
-    return {
-      success: true,
-      bounty: 0.001,
-      trustReceipt: null,
-      reading: data
-    };
-  }
+  const res = await api.post('/api/readings', data);
+  return res.data;
 }
 
 export async function getMapperStats() {
@@ -72,3 +58,4 @@ export async function getCoverage(carrier?: string, technology?: string) {
 }
 
 export default api;
+

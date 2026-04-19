@@ -93,25 +93,46 @@ const CONTRACT_ADDRESS = "0x616e6907FBAd7CDCC18075b67B4119119B478FEf";
 const TRUST_RECEIPTS_ADDRESS = process.env.TRUST_RECEIPTS_ADDRESS || "";
 const CHALLENGE_MANAGER_ADDRESS = process.env.CHALLENGE_MANAGER_ADDRESS || "";
 
+const TRUST_RECEIPTS_ABI = [
+    "function mintTrustReceipt(address subject,uint8 agentType,string modelVersion,string verificationType,uint256 confidenceScore,int256 lat,int256 lng,string geohash,uint256 challengeId,uint256 tokenId,string proofCid) returns (uint256)",
+    "event TrustReceiptMinted(uint256 indexed receiptId,address indexed subject,uint8 agentType,uint256 confidenceScore)"
+];
+
+const CHALLENGE_MANAGER_ABI = [
+    "function nextChallengeId() view returns (uint256)",
+    "function getChallenge(uint256 challengeId) view returns (tuple(uint256 id,address creator,string name,int256 lat,int256 lng,uint256 bountyPerCompletion,uint256 maxCompletions,uint256 completions,uint256 deadline,uint8 status,uint256 locationRadiusMeters,uint256 totalEscrow))",
+    "function getCompletions(uint256 challengeId) view returns (tuple(address user,uint256 tokenId,uint256 trustReceiptId,uint256 timestamp,uint256 payout)[])",
+    "function getChallengeStats(uint256 challengeId) view returns (uint256 completions,uint256 remaining,uint256 escrow,uint8 status)",
+    "function hasUserCompleted(uint256 challengeId,address user) view returns (bool)",
+    "function createChallenge(string name,int256 lat,int256 lng,uint256 bountyPerCompletion,uint256 maxCompletions,uint256 durationDays,uint256 radiusMeters,string placeId) payable returns (uint256)",
+    "function completeChallenge(uint256 challengeId,address user,uint256 tokenId,uint256 trustReceiptId)",
+    "function cancelChallenge(uint256 challengeId)",
+    "event ChallengeCreated(uint256 indexed challengeId,address indexed creator,string name,uint256 totalEscrow)"
+];
+
+function loadAbi(name, fallbackAbi = null) {
+    const artifactPath = join(__dirname, '..', 'artifacts', `${name}.json`);
+    if (!existsSync(artifactPath)) return fallbackAbi;
+    const artifact = JSON.parse(readFileSync(artifactPath, 'utf8'));
+    return artifact.abi || fallbackAbi;
+}
+
 let contract = null;
 let trustReceiptsContract = null;
 let challengeManagerContract = null;
 let wallet = null;
 let provider = new ethers.JsonRpcProvider(FLOW_RPC);
 
-try {
-    const artifactPath = join(__dirname, '..', 'artifacts', 'GeoCorp.json');
-    const { abi } = JSON.parse(readFileSync(artifactPath, 'utf8'));
+if (process.env.DEPLOYER_PRIVATE_KEY) {
     wallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
-    contract = new ethers.Contract(CONTRACT_ADDRESS, abi, wallet);
-    console.log(`⛓️  GeoCorp NFT contract loaded: ${CONTRACT_ADDRESS}`);
+    console.log(`Flow wallet ready. GeoCorp address: ${CONTRACT_ADDRESS}`);
     console.log(`📋 Oracle/Deployer: ${wallet.address}`);
 
     // Load TrustReceipts contract
     if (TRUST_RECEIPTS_ADDRESS) {
         try {
-            const trustArtifact = JSON.parse(readFileSync(join(__dirname, '..', 'artifacts', 'TrustReceipts.json'), 'utf8'));
-            trustReceiptsContract = new ethers.Contract(TRUST_RECEIPTS_ADDRESS, trustArtifact.abi, wallet);
+            const trustAbi = loadAbi('TrustReceipts', TRUST_RECEIPTS_ABI);
+            trustReceiptsContract = new ethers.Contract(TRUST_RECEIPTS_ADDRESS, trustAbi, wallet);
             console.log(`🏷️  TrustReceipts contract loaded: ${TRUST_RECEIPTS_ADDRESS}`);
         } catch (e) {
             console.warn("⚠️  Could not load TrustReceipts contract:", e.message);
@@ -121,15 +142,15 @@ try {
     // Load ChallengeManager contract
     if (CHALLENGE_MANAGER_ADDRESS) {
         try {
-            const challengeArtifact = JSON.parse(readFileSync(join(__dirname, '..', 'artifacts', 'ChallengeManager.json'), 'utf8'));
-            challengeManagerContract = new ethers.Contract(CHALLENGE_MANAGER_ADDRESS, challengeArtifact.abi, wallet);
+            const challengeAbi = loadAbi('ChallengeManager', CHALLENGE_MANAGER_ABI);
+            challengeManagerContract = new ethers.Contract(CHALLENGE_MANAGER_ADDRESS, challengeAbi, wallet);
             console.log(`🎯 ChallengeManager contract loaded: ${CHALLENGE_MANAGER_ADDRESS}`);
         } catch (e) {
             console.warn("⚠️  Could not load ChallengeManager contract:", e.message);
         }
     }
-} catch (err) {
-    console.warn("⚠️  Could not load smart contract (blockchain features disabled):", err.message);
+} else {
+    console.warn("Missing DEPLOYER_PRIVATE_KEY. Blockchain features disabled.");
 }
 
 const upload = multer({ storage: multer.memoryStorage() });
@@ -144,6 +165,9 @@ app.use('/api/auth', authRouter);
 // ============================
 
 // Serve static Founder Dashboard
+app.get('/dashboard', (req, res) => {
+    res.sendFile(join(__dirname, 'public', 'dashboard.html'));
+});
 app.use('/dashboard', express.static(join(__dirname, 'public')));
 
 // New endpoint specifically for the dashboard to pull raw data
@@ -157,7 +181,7 @@ app.get('/api/admin/raw-data', requireAuth, async (req, res) => {
     }
 });
 
-app.post('/api/readings', requireAuth, async (req, res) => {
+app.post('/api/readings/mock', requireAuth, async (req, res) => {
     try {
         const { lat, lng, carrier, technology, signalDbm, wifiCount } = req.body;
         const bounty = 0.001; 
@@ -192,7 +216,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
     }
 });
 
-app.get('/api/mapper/stats', requireAuth, async (req, res) => {
+app.get('/api/mapper/stats/mock', requireAuth, async (req, res) => {
     res.json({
         readings: Math.floor(Math.random() * 50),
         signalBalance: 0.05,
@@ -1671,16 +1695,26 @@ app.post('/api/readings', requireAuth, async (req, res) => {
             .eq('id', userId)
             .single();
 
-        if (trustReceiptsContract && profile?.evm_address) {
+        const receiptRecipient = profile?.evm_address || req.user.evm_address;
+
+        if (!trustReceiptsContract) {
+            return res.status(503).json({ error: 'TrustReceipts contract is not configured' });
+        }
+
+        if (!receiptRecipient || !ethers.isAddress(receiptRecipient)) {
+            return res.status(400).json({ error: 'No valid EVM address for TrustReceipt recipient' });
+        }
+
+        if (trustReceiptsContract) {
             try {
                 const geoHash = `${lat.toFixed(2)},${lng.toFixed(2)}`;
                 const confidenceScore = Math.min(
-                    (wifiCount || 0) > 5 ? 9500 : 7000 + (wifiCount || 0) * 200,
+                    signalDbm ? Math.max(7000, Math.min(9900, 11000 + signalDbm * 20)) : ((wifiCount || 0) > 5 ? 9500 : 8000),
                     10000
                 );
 
                 const trustTx = await trustReceiptsContract.mintTrustReceipt(
-                    profile.evm_address,
+                    receiptRecipient,
                     0,
                     "signal-verifier",
                     carrier || "unknown-carrier",
@@ -1705,15 +1739,26 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                     trustReceiptId = Number(trustReceiptsContract.interface.parseLog(receiptEvent).args.receiptId);
                 }
                 console.log(`📡 TrustReceipt minted for signal reading: ID=${trustReceiptId}`);
+                logAgentActivity('trust_receipt_minted', {
+                    status: 'success',
+                    receiptId: trustReceiptId,
+                    txHash: trustReceiptTx,
+                    agentId: 'signal-verifier',
+                    confidenceScore,
+                    carrier,
+                    technology,
+                    signalDbm,
+                });
             } catch (trustErr) {
                 console.error('⚠️ TrustReceipt mint failed:', trustErr.message);
+                return res.status(502).json({ error: `TrustReceipt mint failed: ${trustErr.message}` });
             }
         }
 
         const REWARD_PER_READING = 0.001;
         bountyPaid = REWARD_PER_READING;
 
-        const { data: reading } = await supabaseAdmin.from('signal_readings').insert({
+        const { data: reading, error: readingError } = await supabaseAdmin.from('signal_readings').insert({
             user_id: userId,
             lat,
             lng,
@@ -1726,6 +1771,8 @@ app.post('/api/readings', requireAuth, async (req, res) => {
             trust_receipt_id: trustReceiptId,
             bounty_paid: bountyPaid,
         }).select().single();
+
+        if (readingError) throw readingError;
 
         if (profile) {
             const newBalance = (profile.signal_balance || 0) + bountyPaid;

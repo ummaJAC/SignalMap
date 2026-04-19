@@ -38,15 +38,16 @@ export default function MapScreen() {
   useEffect(() => {
     if (isMapping) {
       startLocationWatcher((loc) => {
-        setLastKnownLocation(loc.lat, loc.lng);
+        setLastKnownLocation(loc);
         setCenter([loc.lng, loc.lat]);
         cameraRef.current?.setCamera({ centerCoordinate: [loc.lng, loc.lat], zoomLevel: 14, animationDuration: 500 });
       });
 
-      intervalRef.current = setInterval(async () => {
+      const collectAndSend = async () => {
         const data = await collectSignalData();
         if (!data || !token) return;
 
+        setLastKnownLocation(data);
         setSending(true);
         try {
           const result = await sendReading({
@@ -56,6 +57,8 @@ export default function MapScreen() {
             technology: data.technology,
             signalDbm: data.signalDbm,
             wifiCount: data.wifiCount,
+            speedDown: data.speedDown,
+            speedUp: data.speedUp,
           });
 
           if (result.success) {
@@ -67,6 +70,8 @@ export default function MapScreen() {
               technology: data.technology,
               signalDbm: data.signalDbm,
               wifiCount: data.wifiCount,
+              speedDown: data.speedDown,
+              speedUp: data.speedUp,
               bounty: result.bounty,
               trustReceiptId: result.trustReceipt?.id || null,
               createdAt: new Date().toISOString(),
@@ -81,9 +86,13 @@ export default function MapScreen() {
           }
         } catch (err) {
           console.error('Sending reading failed:', err);
+          Alert.alert('Upload failed', 'Signal data was collected, but the backend did not accept it.');
         }
         setSending(false);
-      }, 30000);
+      };
+
+      collectAndSend();
+      intervalRef.current = setInterval(collectAndSend, 30000);
     } else {
       stopLocationWatcher();
       if (intervalRef.current) {
@@ -183,12 +192,43 @@ export default function MapScreen() {
       </View>
 
       {isMapping && (
-        <View style={styles.statusBar}>
-          <View style={styles.pulseDot} />
-          <Text style={styles.statusText}>
-            MAPPING{sending ? ' • Sending...' : ''} • {readings.length} points
-          </Text>
-        </View>
+        <>
+          <View style={styles.statusBar}>
+            <View style={styles.pulseDot} />
+            <Text style={styles.statusText}>
+              MAPPING{sending ? ' • Sending...' : ''} • {readings.length} points
+            </Text>
+          </View>
+
+          {lastKnownLocation?.carrier && (
+            <View style={styles.telemetryHud}>
+              <Text style={styles.hudTitle}>LIVE TELEMETRY</Text>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>OPERATOR</Text>
+                <Text style={styles.hudValue}>{lastKnownLocation.carrier}</Text>
+              </View>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>NETWORK TECH</Text>
+                <Text style={styles.hudValue}>{lastKnownLocation.technology || 'LTE'}</Text>
+              </View>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>SIGNAL STRENGTH</Text>
+                <Text style={[
+                  styles.hudValue, 
+                  {color: (lastKnownLocation.signalDbm ?? -120) > -85 ? '#10B981' : ((lastKnownLocation.signalDbm ?? -120) > -105 ? '#F59E0B' : '#EF4444')}
+                ]}>
+                  {lastKnownLocation.signalDbm ?? 'n/a'} dBm
+                </Text>
+              </View>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>DOWNLOAD SAMPLE</Text>
+                <Text style={styles.hudValue}>
+                  {lastKnownLocation.speedDown != null ? `${lastKnownLocation.speedDown} Mbps` : 'n/a'}
+                </Text>
+              </View>
+            </View>
+          )}
+        </>
       )}
 
       <View style={styles.bottomBar}>
@@ -231,6 +271,16 @@ const styles = StyleSheet.create({
     width: 8, height: 8, borderRadius: 4, backgroundColor: '#F59E0B',
   },
   statusText: { fontSize: 11, fontWeight: '700', color: '#92400E' },
+  telemetryHud: {
+    position: 'absolute', top: 135, left: 16, width: 200,
+    backgroundColor: 'rgba(255,255,255,0.85)', borderRadius: 16, padding: 16,
+    borderWidth: 1, borderColor: '#E2E8F0',
+    shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, elevation: 4,
+  },
+  hudTitle: { fontSize: 10, fontWeight: '800', color: '#64748B', marginBottom: 12, letterSpacing: 0.5 },
+  hudRow: { marginBottom: 8 },
+  hudLabel: { fontSize: 9, fontWeight: '700', color: '#94A3B8', marginBottom: 2 },
+  hudValue: { fontSize: 13, fontWeight: '900', color: '#0F172A' },
   bottomBar: {
     position: 'absolute', bottom: 40, left: 16, right: 16,
   },

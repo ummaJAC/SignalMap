@@ -10,9 +10,24 @@ interface SignalReading {
   technology: string;
   signalDbm: number | null;
   wifiCount: number;
+  speedDown?: number | null;
+  speedUp?: number | null;
   bounty: number;
   trustReceiptId: number | null;
   createdAt: string;
+}
+
+interface LastKnownLocation {
+  lat: number;
+  lng: number;
+  carrier?: string;
+  technology?: string;
+  signalDbm?: number | null;
+  wifiCount?: number;
+  speedDown?: number | null;
+  speedUp?: number | null;
+  accuracy?: number;
+  timestamp?: number;
 }
 
 interface MapperState {
@@ -23,14 +38,14 @@ interface MapperState {
   totalReadings: number;
   signalBalance: number;
   flowBalance: number;
-  lastKnownLocation: { lat: number; lng: number } | null;
+  lastKnownLocation: LastKnownLocation | null;
 
   setToken: (token: string) => void;
   setEvmAddress: (addr: string) => void;
   setIsMapping: (val: boolean) => void;
   addReading: (r: SignalReading) => void;
   setBalances: (signal: number, flow: number) => void;
-  setLastKnownLocation: (lat: number, lng: number) => void;
+  setLastKnownLocation: (loc: LastKnownLocation) => void;
   reset: () => void;
 }
 
@@ -55,7 +70,7 @@ const useMapperStore = create<MapperState>()(
         signalBalance: s.signalBalance + r.bounty,
       })),
       setBalances: (signalBalance, flowBalance) => set({ signalBalance, flowBalance }),
-      setLastKnownLocation: (lat, lng) => set({ lastKnownLocation: { lat, lng } }),
+      setLastKnownLocation: (lastKnownLocation) => set({ lastKnownLocation }),
       reset: () => set({
         token: null, evmAddress: null, isMapping: false,
         readings: [], totalReadings: 0, signalBalance: 0, flowBalance: 0,

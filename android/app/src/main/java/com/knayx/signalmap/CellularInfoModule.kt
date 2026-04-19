@@ -40,7 +40,7 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
         try {
             val cellInfoList = telephonyManager.allCellInfo
             if (cellInfoList != null && cellInfoList.isNotEmpty()) {
-                val cellInfo = cellInfoList[0]
+                val cellInfo = cellInfoList.firstOrNull { it.isRegistered } ?: cellInfoList[0]
                 var signalDbm: Int? = null
                 var technology = "Unknown"
 
