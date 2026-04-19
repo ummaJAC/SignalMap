@@ -73,15 +73,18 @@
                 feed.innerHTML = '';
                 data.slice(0, 15).forEach(d => {
                     const color = d.signal_dbm > -85 ? 'text-emerald-500' : (d.signal_dbm > -105 ? 'text-amber-500' : 'text-red-500');
+                    const statusColor = d.status === 'confirmed' ? 'bg-emerald-100 text-emerald-700' : (d.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700');
+                    const tx = d.trust_receipt_tx ? `<a class="text-emerald-600 underline" href="https://evm-testnet.flowscan.io/tx/${d.trust_receipt_tx}" target="_blank" rel="noreferrer">tx</a>` : 'tx pending';
                     feed.innerHTML += `
                         <div class="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center transition hover:bg-slate-100">
                             <div>
-                                <p class="font-bold text-slate-700 text-sm">${d.carrier || 'Unknown'} <span class="text-xs bg-slate-200 px-2 py-0.5 rounded-full ml-1">${d.technology || 'N/A'}</span></p>
-                                <p class="text-xs text-slate-400 font-mono mt-1">${d.lat.toFixed(4)}, ${d.lng.toFixed(4)} Â· ${d.speed_down ? d.speed_down + ' Mbps' : 'speed n/a'}</p>
-                                <p class="text-[10px] text-slate-400 font-mono mt-1">receipt: ${d.trust_receipt_id || 'pending'}</p>
+                                <p class="font-bold text-slate-700 text-sm">${d.carrier || 'Unknown'} <span class="text-xs bg-slate-200 px-2 py-0.5 rounded-full ml-1">${d.technology || 'N/A'}</span> <span class="text-xs px-2 py-0.5 rounded-full ml-1 ${statusColor}">${d.status || 'pending'}</span></p>
+                                <p class="text-xs text-slate-400 font-mono mt-1">${d.lat.toFixed(4)}, ${d.lng.toFixed(4)} · ${d.speed_down != null ? d.speed_down + ' Mbps' : 'speed n/a'}</p>
+                                <p class="text-[10px] text-slate-400 font-mono mt-1">receipt: ${d.trust_receipt_id || 'pending'} · ${tx}</p>
+                                ${d.error_message ? `<p class="text-[10px] text-red-500 font-mono mt-1">${d.error_message}</p>` : ''}
                             </div>
                             <div class="font-black ${color} flex items-center gap-1">
-                                ${d.signal_dbm} dBm
+                                ${d.signal_dbm ?? 'n/a'} dBm
                             </div>
                         </div>
                     `;
@@ -95,3 +98,4 @@
     </script>
 </body>
 </html>
+

@@ -1687,7 +1687,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
 
         let trustReceiptId = null;
         let trustReceiptTx = null;
-        let bountyPaid = 0;
+        const REWARD_PER_READING = 0.001;
 
         const { data: profile } = await supabaseAdmin
             .from('profiles')
@@ -1697,68 +1697,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
 
         const receiptRecipient = profile?.evm_address || req.user.evm_address;
 
-        if (!trustReceiptsContract) {
-            return res.status(503).json({ error: 'TrustReceipts contract is not configured' });
-        }
-
-        if (!receiptRecipient || !ethers.isAddress(receiptRecipient)) {
-            return res.status(400).json({ error: 'No valid EVM address for TrustReceipt recipient' });
-        }
-
-        if (trustReceiptsContract) {
-            try {
-                const geoHash = `${lat.toFixed(2)},${lng.toFixed(2)}`;
-                const confidenceScore = Math.min(
-                    signalDbm ? Math.max(7000, Math.min(9900, 11000 + signalDbm * 20)) : ((wifiCount || 0) > 5 ? 9500 : 8000),
-                    10000
-                );
-
-                const trustTx = await trustReceiptsContract.mintTrustReceipt(
-                    receiptRecipient,
-                    0,
-                    "signal-verifier",
-                    carrier || "unknown-carrier",
-                    confidenceScore,
-                    BigInt(Math.round(lat * 1e6)),
-                    BigInt(Math.round(lng * 1e6)),
-                    geoHash,
-                    0,
-                    BigInt(0),
-                    `signal:${technology}:${signalDbm || 'unknown'}dBm`
-                );
-                const receipt = await trustTx.wait();
-                trustReceiptTx = receipt.hash;
-
-                const receiptEvent = receipt.logs?.find(l => {
-                    try {
-                        const parsed = trustReceiptsContract.interface.parseLog(l);
-                        return parsed && parsed.name === 'TrustReceiptMinted';
-                    } catch { return false; }
-                });
-                if (receiptEvent) {
-                    trustReceiptId = Number(trustReceiptsContract.interface.parseLog(receiptEvent).args.receiptId);
-                }
-                console.log(`📡 TrustReceipt minted for signal reading: ID=${trustReceiptId}`);
-                logAgentActivity('trust_receipt_minted', {
-                    status: 'success',
-                    receiptId: trustReceiptId,
-                    txHash: trustReceiptTx,
-                    agentId: 'signal-verifier',
-                    confidenceScore,
-                    carrier,
-                    technology,
-                    signalDbm,
-                });
-            } catch (trustErr) {
-                console.error('⚠️ TrustReceipt mint failed:', trustErr.message);
-                return res.status(502).json({ error: `TrustReceipt mint failed: ${trustErr.message}` });
-            }
-        }
-
-        const REWARD_PER_READING = 0.001;
-        bountyPaid = REWARD_PER_READING;
-
-        const { data: reading, error: readingError } = await supabaseAdmin.from('signal_readings').insert({
+        const { data: pendingReading, error: pendingError } = await supabaseAdmin.from('signal_readings').insert({
             user_id: userId,
             lat,
             lng,
@@ -1768,14 +1707,92 @@ app.post('/api/readings', requireAuth, async (req, res) => {
             wifi_count: wifiCount || 0,
             speed_down: speedDown || null,
             speed_up: speedUp || null,
-            trust_receipt_id: trustReceiptId,
-            bounty_paid: bountyPaid,
+            status: 'pending',
+            bounty_paid: 0,
         }).select().single();
+
+        if (pendingError) throw pendingError;
+
+        const failReading = async (statusCode, message) => {
+            await supabaseAdmin.from('signal_readings')
+                .update({ status: 'failed', error_message: message })
+                .eq('id', pendingReading.id);
+            return res.status(statusCode).json({ error: message, reading: pendingReading });
+        };
+
+        if (!trustReceiptsContract) {
+            return failReading(503, 'TrustReceipts contract is not configured');
+        }
+
+        if (!receiptRecipient || !ethers.isAddress(receiptRecipient)) {
+            return failReading(400, 'No valid EVM address for TrustReceipt recipient');
+        }
+
+        try {
+            const geoHash = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+            const confidenceScore = Math.min(
+                signalDbm ? Math.max(7000, Math.min(9900, 11000 + signalDbm * 20)) : ((wifiCount || 0) > 5 ? 9500 : 8000),
+                10000
+            );
+
+            const trustTx = await trustReceiptsContract.mintTrustReceipt(
+                receiptRecipient,
+                0,
+                'signal-verifier',
+                carrier || 'unknown-carrier',
+                confidenceScore,
+                BigInt(Math.round(lat * 1e6)),
+                BigInt(Math.round(lng * 1e6)),
+                geoHash,
+                0,
+                BigInt(0),
+                `signal:${technology}:${signalDbm || 'unknown'}dBm`
+            );
+            const receipt = await trustTx.wait();
+            trustReceiptTx = receipt.hash;
+
+            const receiptEvent = receipt.logs?.find(l => {
+                try {
+                    const parsed = trustReceiptsContract.interface.parseLog(l);
+                    return parsed && parsed.name === 'TrustReceiptMinted';
+                } catch { return false; }
+            });
+            if (receiptEvent) {
+                trustReceiptId = Number(trustReceiptsContract.interface.parseLog(receiptEvent).args.receiptId);
+            }
+
+            console.log(`TrustReceipt minted for signal reading: ID=${trustReceiptId}`);
+            logAgentActivity('trust_receipt_minted', {
+                status: 'success',
+                receiptId: trustReceiptId,
+                txHash: trustReceiptTx,
+                agentId: 'signal-verifier',
+                confidenceScore,
+                carrier,
+                technology,
+                signalDbm,
+            });
+        } catch (trustErr) {
+            console.error('TrustReceipt mint failed:', trustErr.message);
+            return failReading(502, `TrustReceipt mint failed: ${trustErr.message}`);
+        }
+
+        const { data: reading, error: readingError } = await supabaseAdmin.from('signal_readings')
+            .update({
+                trust_receipt_id: trustReceiptId,
+                trust_receipt_tx: trustReceiptTx,
+                status: 'confirmed',
+                error_message: null,
+                bounty_paid: REWARD_PER_READING,
+            })
+            .eq('id', pendingReading.id)
+            .select()
+            .single();
 
         if (readingError) throw readingError;
 
         if (profile) {
-            const newBalance = (profile.signal_balance || 0) + bountyPaid;
+            const newBalance = (profile.signal_balance || 0) + REWARD_PER_READING;
             await supabaseAdmin.from('profiles')
                 .update({ signal_balance: Math.round(newBalance * 10000) / 10000 })
                 .eq('id', userId);
@@ -1784,28 +1801,27 @@ app.post('/api/readings', requireAuth, async (req, res) => {
         await supabaseAdmin.from('transactions').insert({
             user_id: userId,
             type: 'signal_reading',
-            amount: bountyPaid,
+            amount: REWARD_PER_READING,
             description: `Signal: ${carrier || '?'} ${technology || '?'} ${signalDbm || '?'}dBm`,
         });
 
-        console.log(`📡 Reading saved: ${carrier}/${technology}/${signalDbm}dBm @ ${lat.toFixed(4)},${lng.toFixed(4)} → +${bountyPaid} FLOW`);
+        console.log(`Reading saved: ${carrier}/${technology}/${signalDbm}dBm @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW`);
 
         res.json({
             success: true,
-            reading: reading,
+            reading,
             trustReceipt: trustReceiptId ? {
                 id: trustReceiptId,
                 txHash: trustReceiptTx,
                 flowscanUrl: trustReceiptTx ? `https://evm-testnet.flowscan.io/tx/${trustReceiptTx}` : null,
             } : null,
-            bounty: bountyPaid,
+            bounty: REWARD_PER_READING,
         });
     } catch (error) {
         console.error('Error saving reading:', error);
         res.status(500).json({ error: error.message });
     }
 });
-
 // GET /api/coverage — Free aggregated heatmap data
 app.get('/api/coverage', async (req, res) => {
     try {
@@ -1943,3 +1959,4 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('exit', (code) => {
     console.log(`Process exiting with code: ${code}`);
 });
+
