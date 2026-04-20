@@ -3,6 +3,8 @@ package com.knayx.signalmap
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -57,6 +59,7 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
         val telephonyManager = reactApplicationContext.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         val hasFineLocation = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
         val hasReadPhoneState = hasPermission(Manifest.permission.READ_PHONE_STATE)
+        val activeTransport = activeTransportType()
 
         val networkOperatorName = telephonyManager.networkOperatorName
         val simOperatorName = telephonyManager.simOperatorName
@@ -70,6 +73,7 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
         map.putString("simOperator", safeString(simOperator))
         map.putBoolean("locationPermission", hasFineLocation)
         map.putBoolean("phonePermission", hasReadPhoneState)
+        map.putString("activeTransportType", activeTransport)
 
         parseMccMnc(networkOperator).let {
             if (it.first != null) map.putString("mcc", it.first)
@@ -139,6 +143,20 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
             map.putInt("wifiFrequencyMhz", info.frequency)
         }
         map.putString("wifiIpAddress", intToIp(info.ipAddress))
+    }
+
+    private fun activeTransportType(): String {
+        val connectivityManager = reactApplicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return "unknown"
+        val network = connectivityManager.activeNetwork ?: return "none"
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return "unknown"
+        return when {
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+            else -> "unknown"
+        }
     }
 
     private fun cellInfoToMap(cellInfo: CellInfo): WritableMap {

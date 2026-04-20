@@ -5,6 +5,23 @@ import { collectBaseSignalDataForLocation } from './signalCollector';
 import { sendReading, setAuthToken } from './api';
 
 export const SIGNALMAP_BACKGROUND_LOCATION_TASK = 'SIGNALMAP_BACKGROUND_LOCATION_TASK';
+const LAST_READING_UPLOAD_AT_KEY = 'signalmap-last-reading-upload-at';
+
+export async function shouldUploadReading(minIntervalMs = 25000): Promise<boolean> {
+  try {
+    const raw = await AsyncStorage.getItem(LAST_READING_UPLOAD_AT_KEY);
+    const lastAt = raw ? Number(raw) : 0;
+    return !Number.isFinite(lastAt) || Date.now() - lastAt >= minIntervalMs;
+  } catch {
+    return true;
+  }
+}
+
+export async function markReadingUploaded(): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LAST_READING_UPLOAD_AT_KEY, String(Date.now()));
+  } catch {}
+}
 
 async function getPersistedToken(): Promise<string | null> {
   try {
@@ -31,6 +48,7 @@ TaskManager.defineTask(SIGNALMAP_BACKGROUND_LOCATION_TASK, async ({ data, error 
   const token = await getPersistedToken();
   if (!token) return;
   setAuthToken(token);
+  if (!(await shouldUploadReading(25000))) return;
 
   const reading = await collectBaseSignalDataForLocation({
     lat: latest.coords.latitude,
@@ -41,6 +59,7 @@ TaskManager.defineTask(SIGNALMAP_BACKGROUND_LOCATION_TASK, async ({ data, error 
 
   try {
     await sendReading(reading);
+    await markReadingUploaded();
     console.log(`Background reading uploaded @ ${reading.lat.toFixed(4)},${reading.lng.toFixed(4)}`);
   } catch (err) {
     console.warn('Background reading upload failed:', err);

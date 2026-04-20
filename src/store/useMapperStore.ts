@@ -8,6 +8,8 @@ interface SignalReading {
   lng: number;
   carrier: string;
   technology: string;
+  transportType?: string;
+  cellularTechnology?: string | null;
   signalDbm: number | null;
   wifiCount: number;
   speedDown?: number | null;
@@ -48,6 +50,8 @@ interface LastKnownLocation {
   lng: number;
   carrier?: string;
   technology?: string;
+  transportType?: string;
+  cellularTechnology?: string | null;
   signalDbm?: number | null;
   wifiCount?: number;
   speedDown?: number | null;

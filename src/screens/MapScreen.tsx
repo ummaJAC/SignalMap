@@ -4,6 +4,7 @@ import {
   StatusBar, Alert, ActivityIndicator,
 } from 'react-native';
 import Mapbox from '@rnmapbox/maps';
+import * as NetInfo from '@react-native-community/netinfo';
 import useMapperStore from '../store/useMapperStore';
 import {
   collectBaseSignalData,
@@ -13,11 +14,11 @@ import {
   startLocationWatcher,
   stopLocationWatcher,
 } from '../services/signalCollector';
-import { sendReading, getMapperStats, getReadingStatus, updateReadingTelemetry } from '../services/api';
-import { startBackgroundMapping, stopBackgroundMapping } from '../services/backgroundMapping';
+import { sendReading, getMapperStats, getReadingStatus, updateReadingTelemetry, healthCheck } from '../services/api';
+import { markReadingUploaded, shouldUploadReading, startBackgroundMapping, stopBackgroundMapping } from '../services/backgroundMapping';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
-const DEFAULT_CENTER = [121.4737, 31.2304];
+const DEFAULT_CENTER = [30, 20];
 const STYLE_URL = 'mapbox://styles/mapbox/streets-v12';
 
 type LocalMapReading = {
@@ -50,6 +51,9 @@ export default function MapScreen() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const sendingRef = useRef(false);
+  const lastNetworkChangeRef = useRef(Date.now());
+  const networkReachableRef = useRef<boolean | null>(null);
+  const networkSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -99,8 +103,34 @@ export default function MapScreen() {
     });
   }, []);
 
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener((state) => {
+      networkReachableRef.current = state.isInternetReachable;
+      const signature = `${state.type}:${state.isConnected}:${state.isInternetReachable}`;
+      if (networkSignatureRef.current && networkSignatureRef.current !== signature) {
+        lastNetworkChangeRef.current = Date.now();
+      }
+      networkSignatureRef.current = signature;
+    });
+    NetInfo.fetch().then((state) => {
+      networkReachableRef.current = state.isInternetReachable;
+      networkSignatureRef.current = `${state.type}:${state.isConnected}:${state.isInternetReachable}`;
+    }).catch(() => {
+      networkReachableRef.current = null;
+    });
+    return unsubscribe;
+  }, []);
+
   const collectAndSend = useCallback(async () => {
     if (!token || sendingRef.current) return;
+    if (!(await shouldUploadReading(25000))) {
+      setMappingStatus('Waiting for next sample');
+      return;
+    }
+    if (networkReachableRef.current === false || Date.now() - lastNetworkChangeRef.current < 8000) {
+      setMappingStatus('Network switching, retrying');
+      return;
+    }
 
     sendingRef.current = true;
     setSending(true);
@@ -120,6 +150,9 @@ export default function MapScreen() {
         zoomLevel: 14,
         animationDuration: 500,
       });
+
+      setMappingStatus('Checking backend');
+      await healthCheck(15000);
 
       setMappingStatus('Uploading reading');
       const result = await sendReading({
@@ -168,6 +201,8 @@ export default function MapScreen() {
           lng: data.lng,
           carrier: data.carrier,
           technology: data.technology,
+          transportType: data.transportType,
+          cellularTechnology: data.cellularTechnology,
           signalDbm: data.signalDbm,
           wifiCount: data.wifiCount,
           speedDown: data.speedDown,
@@ -212,6 +247,7 @@ export default function MapScreen() {
         }].slice(-200));
 
         setMappingStatus('Accepted, measuring speed');
+        void markReadingUploaded();
         if (result.pending && result.readingId) {
           void pollReadingUntilFinal(String(result.readingId));
         }
@@ -221,8 +257,13 @@ export default function MapScreen() {
             if (!mountedRef.current) return;
             const enriched = mergeQualityIntoReading(data, quality);
             setLastKnownLocation(enriched);
-            const hasUsableQuality = quality.speedDown != null || quality.latencyMs != null;
-            setMappingStatus(hasUsableQuality ? 'Quality OK' : 'Speed probe failed');
+            const hasDownload = quality.speedDown != null;
+            const hasLatency = quality.latencyMs != null;
+            setMappingStatus(
+              hasDownload
+                ? 'Quality OK'
+                : (hasLatency ? 'Latency OK, speed unavailable' : 'Speed probe failed')
+            );
 
             if (result.readingId) {
               try {
@@ -246,8 +287,13 @@ export default function MapScreen() {
       }
     } catch (err) {
       console.error('Sending reading failed:', err);
-      setMappingStatus('Upload failed');
-      Alert.alert('Upload failed', 'Signal data was collected, but the backend did not accept it.');
+      const message = String((err as any)?.message || '').toLowerCase();
+      if (message.includes('backend unreachable') || message.includes('network') || message.includes('timeout')) {
+        setMappingStatus('Backend unreachable, retrying');
+      } else {
+        setMappingStatus('Upload failed');
+        Alert.alert('Upload failed', 'Signal data was collected, but the backend did not accept it.');
+      }
     } finally {
       sendingRef.current = false;
       setSending(false);
@@ -350,7 +396,7 @@ export default function MapScreen() {
         <Mapbox.Camera
           ref={cameraRef}
           centerCoordinate={center}
-          zoomLevel={12}
+          zoomLevel={lastKnownLocation ? 12 : 2}
         />
         <Mapbox.UserLocation />
         {readings.length > 0 && (
@@ -398,8 +444,14 @@ export default function MapScreen() {
                 <Text style={styles.hudValue}>{lastKnownLocation.carrier}</Text>
               </View>
               <View style={styles.hudRow}>
-                <Text style={styles.hudLabel}>NETWORK TECH</Text>
-                <Text style={styles.hudValue}>{lastKnownLocation.technology || 'LTE'}</Text>
+                <Text style={styles.hudLabel}>TRANSPORT</Text>
+                <Text style={styles.hudValue}>{lastKnownLocation.transportType || lastKnownLocation.networkType || 'unknown'}</Text>
+              </View>
+              <View style={styles.hudRow}>
+                <Text style={styles.hudLabel}>CELLULAR TECH</Text>
+                <Text style={styles.hudValue}>
+                  {lastKnownLocation.cellularTechnology || (lastKnownLocation.transportType?.includes('wifi') ? 'n/a' : lastKnownLocation.technology || 'Unknown')}
+                </Text>
               </View>
               {lastKnownLocation.wifiSsid ? (
                 <View style={styles.hudRow}>

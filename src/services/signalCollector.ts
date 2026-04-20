@@ -9,6 +9,8 @@ export interface RawSignalData {
   lng: number;
   carrier: string;
   technology: string;
+  transportType: string;
+  cellularTechnology: string | null;
   signalDbm: number | null;
   wifiCount: number;
   speedDown: number | null;
@@ -52,6 +54,12 @@ export interface NetworkQuality {
 }
 
 let locationSubscription: Location.LocationSubscription | null = null;
+const DEFAULT_API_BASE = 'https://signalmap-production.up.railway.app';
+const SPEED_API_BASES = Array.from(new Set([
+  process.env.EXPO_PUBLIC_API_BASE_URL,
+  process.env.EXPO_PUBLIC_API_FALLBACK_URL,
+  DEFAULT_API_BASE,
+].filter(Boolean).map((url) => String(url).replace(/\/$/, ''))));
 
 export async function requestPermissions(): Promise<boolean> {
   const { status: fgStatus } = await Location.requestForegroundPermissionsAsync();
@@ -107,6 +115,11 @@ export async function collectBaseSignalDataForLocation(
           details: netInfo.details,
         },
         native: nativeTelemetry,
+        classification: {
+          transportType: base.transportType,
+          cellularTechnology: base.cellularTechnology,
+          activeWifi: base.transportType === 'wifi' || base.transportType === 'wifi-vpn',
+        },
         quality: null,
         collectedAt: new Date().toISOString(),
       },
@@ -161,22 +174,27 @@ function normalizeBaseTelemetry(
   nativeTelemetry: Record<string, any>
 ): Omit<RawSignalData, 'speedDown' | 'speedUp' | 'speedSource' | 'speedError' | 'latencyMs' | 'telemetryRaw'> {
   let carrier = 'Unknown';
-  let technology = 'Unknown';
+  let cellularTechnology = 'Unknown';
   let signalDbm: number | null = null;
+  const netInfoType = String(netInfo.type || 'unknown').toLowerCase();
+  const nativeTransport = String(nativeTelemetry.activeTransportType || '').toLowerCase();
+  const rawTransportType = nativeTransport && nativeTransport !== 'unknown'
+    ? nativeTransport
+    : netInfoType;
+  const transportType = classifyTransport(rawTransportType, netInfoType);
+  const isActiveWifi = transportType === 'wifi' || transportType === 'wifi-vpn';
 
   if (nativeTelemetry.carrier) carrier = nativeTelemetry.carrier;
   if (nativeTelemetry.networkOperatorName) carrier = nativeTelemetry.networkOperatorName;
   if ((!carrier || carrier === 'Unknown') && nativeTelemetry.simOperatorName) carrier = nativeTelemetry.simOperatorName;
-  if (nativeTelemetry.technology && nativeTelemetry.technology !== 'Unknown') technology = nativeTelemetry.technology;
-  if (nativeTelemetry.cellularGeneration && nativeTelemetry.cellularGeneration !== 'Unknown' && technology === 'Unknown') {
-    technology = nativeTelemetry.cellularGeneration;
+  if (nativeTelemetry.technology && nativeTelemetry.technology !== 'Unknown') cellularTechnology = nativeTelemetry.technology;
+  if (nativeTelemetry.cellularGeneration && nativeTelemetry.cellularGeneration !== 'Unknown' && cellularTechnology === 'Unknown') {
+    cellularTechnology = nativeTelemetry.cellularGeneration;
   }
   if (nativeTelemetry.signalDbm !== undefined) signalDbm = nativeTelemetry.signalDbm;
   if (signalDbm == null && nativeTelemetry.dbm !== undefined) signalDbm = nativeTelemetry.dbm;
 
-  if (netInfo.type === 'wifi') {
-    technology = 'WiFi';
-  } else if (netInfo.type === 'cellular') {
+  if (transportType === 'cellular' || netInfoType === 'cellular') {
     const cellType = (netInfo.details as any)?.cellularGeneration;
     if (cellType) {
       const techMap: Record<string, string> = {
@@ -189,20 +207,25 @@ function normalizeBaseTelemetry(
         '3': '4G/LTE',
         '4': '5G',
       };
-      technology = techMap[String(cellType).toLowerCase()] || technology;
+      cellularTechnology = techMap[String(cellType).toLowerCase()] || cellularTechnology;
     }
-  } else if (technology === 'Unknown' && netInfo.type) {
-    technology = netInfo.type.toUpperCase();
   }
+  if (cellularTechnology === 'Unknown' && nativeTelemetry.activeNetworkType && nativeTelemetry.activeNetworkType !== 'UNKNOWN') {
+    cellularTechnology = nativeTelemetry.activeNetworkType;
+  }
+
+  const technology = isActiveWifi ? 'WiFi' : (cellularTechnology || transportType.toUpperCase());
 
   return {
     lat: loc.lat,
     lng: loc.lng,
     carrier,
     technology,
+    transportType,
+    cellularTechnology: cellularTechnology === 'Unknown' ? null : cellularTechnology,
     signalDbm,
-    wifiCount: netInfo.type === 'wifi' ? 1 : 0,
-    networkType: nativeTelemetry.networkType || netInfo.type || null,
+    wifiCount: isActiveWifi ? 1 : 0,
+    networkType: transportType || null,
     simOperator: nativeTelemetry.simOperatorName || null,
     networkOperator: nativeTelemetry.networkOperatorName || carrier || null,
     mcc: nativeTelemetry.mcc || null,
@@ -218,20 +241,32 @@ function normalizeBaseTelemetry(
     asuLevel: nativeTelemetry.asuLevel ?? null,
     dbm: nativeTelemetry.dbm ?? signalDbm,
     isRegistered: nativeTelemetry.isRegistered ?? null,
-    wifiSsid: nativeTelemetry.wifiSsid || null,
-    wifiBssid: nativeTelemetry.wifiBssid || null,
-    wifiRssi: nativeTelemetry.wifiRssi ?? null,
-    wifiLinkSpeedMbps: nativeTelemetry.wifiLinkSpeedMbps ?? null,
-    wifiFrequencyMhz: nativeTelemetry.wifiFrequencyMhz ?? null,
-    wifiIpAddress: nativeTelemetry.wifiIpAddress || null,
+    wifiSsid: isActiveWifi ? (nativeTelemetry.wifiSsid || null) : null,
+    wifiBssid: isActiveWifi ? (nativeTelemetry.wifiBssid || null) : null,
+    wifiRssi: isActiveWifi ? (nativeTelemetry.wifiRssi ?? null) : null,
+    wifiLinkSpeedMbps: isActiveWifi ? (nativeTelemetry.wifiLinkSpeedMbps ?? null) : null,
+    wifiFrequencyMhz: isActiveWifi ? (nativeTelemetry.wifiFrequencyMhz ?? null) : null,
+    wifiIpAddress: isActiveWifi ? (nativeTelemetry.wifiIpAddress || null) : null,
     accuracy: loc.accuracy,
     timestamp: Date.now(),
   };
 }
 
+function classifyTransport(rawTransportType: string, netInfoType: string): string {
+  const raw = String(rawTransportType || 'unknown').toLowerCase();
+  const net = String(netInfoType || 'unknown').toLowerCase();
+
+  if (raw === 'vpn') {
+    if (net === 'wifi') return 'wifi-vpn';
+    if (net === 'cellular') return 'cellular-vpn';
+  }
+
+  return raw || net || 'unknown';
+}
+
 export async function measureNetworkQuality(): Promise<NetworkQuality> {
   const [latency, download, upload] = await Promise.all([
-    measureLatencyMs('https://speed.cloudflare.com/cdn-cgi/trace'),
+    measureLatencyWithFallback(),
     measureDownloadMbpsWithFallback(),
     measureUploadMbps(),
   ]);
@@ -243,6 +278,21 @@ export async function measureNetworkQuality(): Promise<NetworkQuality> {
     speedSource: [download.speedSource, upload.speedSource].filter(Boolean).join('+') || download.speedSource,
     speedError: [latency.error, download.speedError, upload.speedError].filter(Boolean).join('|') || null,
   };
+}
+
+async function measureLatencyWithFallback(): Promise<{ latencyMs: number | null; error: string | null }> {
+  const probes = [
+    { source: 'cloudflare', url: 'https://speed.cloudflare.com/cdn-cgi/trace' },
+    ...SPEED_API_BASES.map((base) => ({ source: 'signalmap-backend', url: `${base}/api/speed/ping` })),
+  ];
+
+  const errors: string[] = [];
+  for (const probe of probes) {
+    const result = await measureLatencyMs(probe.url);
+    if (result.latencyMs != null) return result;
+    if (result.error) errors.push(`${probe.source}:${result.error}`);
+  }
+  return { latencyMs: null, error: errors.join('|') || 'latency:all_failed' };
 }
 
 async function measureLatencyMs(url: string): Promise<{ latencyMs: number | null; error: string | null }> {
@@ -265,6 +315,7 @@ async function measureDownloadMbpsWithFallback(): Promise<{
   const probes = [
     { source: 'cloudflare', url: `https://speed.cloudflare.com/__down?bytes=200000&cacheBust=${Date.now()}` },
     { source: 'hetzner', url: `https://speed.hetzner.de/1MB.bin?cacheBust=${Date.now()}` },
+    ...SPEED_API_BASES.map((base) => ({ source: 'signalmap-backend', url: `${base}/api/speed/download?bytes=200000&cacheBust=${Date.now()}` })),
   ];
 
   let lastError: string | null = null;
@@ -309,23 +360,34 @@ async function measureUploadMbps(): Promise<{
   speedError: string | null;
 }> {
   const payload = 'signalmap-upload-probe-'.repeat(4096);
-  const startedAt = Date.now();
-  try {
-    const res = await fetchWithTimeout(`https://speed.cloudflare.com/__up?cacheBust=${Date.now()}`, {
+  const probes = [
+    { source: 'cloudflare-upload', url: `https://speed.cloudflare.com/__up?cacheBust=${Date.now()}` },
+    ...SPEED_API_BASES.map((base) => ({ source: 'signalmap-backend-upload', url: `${base}/api/speed/upload?cacheBust=${Date.now()}` })),
+  ];
+
+  let lastError: string | null = null;
+  for (const probe of probes) {
+    const startedAt = Date.now();
+    try {
+      const res = await fetchWithTimeout(probe.url, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: payload,
-    }, 4500);
-    if (!res.ok) {
-      return { speedUp: null, speedSource: 'cloudflare-upload', speedError: `upload:http_${res.status}` };
+      }, 4500);
+      if (!res.ok) {
+        lastError = `upload:${probe.source}:http_${res.status}`;
+        continue;
+      }
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      const mbps = Math.round((payload.length * 8 / elapsedSeconds / 1_000_000) * 10) / 10;
+      return { speedUp: mbps, speedSource: probe.source, speedError: null };
+    } catch (error: any) {
+      const message = String(error?.message || 'network_error').replace(/\s+/g, '_').toLowerCase();
+      lastError = `upload:${probe.source}:${message}`;
     }
-    const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
-    const mbps = Math.round((payload.length * 8 / elapsedSeconds / 1_000_000) * 10) / 10;
-    return { speedUp: mbps, speedSource: 'cloudflare-upload', speedError: null };
-  } catch (error: any) {
-    const message = String(error?.message || 'network_error').replace(/\s+/g, '_').toLowerCase();
-    return { speedUp: null, speedSource: 'cloudflare-upload', speedError: `upload:${message}` };
   }
+
+  return { speedUp: null, speedSource: null, speedError: lastError || 'upload:all_failed' };
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {

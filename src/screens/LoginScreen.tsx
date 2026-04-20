@@ -77,7 +77,7 @@ export default function LoginScreen() {
       await login(email.trim());
       setStep('otp');
     } catch (err: any) {
-      Alert.alert('OTP failed', err.response?.data?.error || 'Failed to send OTP.');
+      Alert.alert('OTP failed', err.response?.data?.error || err.message || 'Failed to send OTP.');
     } finally {
       setLoading(false);
     }
@@ -94,7 +94,7 @@ export default function LoginScreen() {
       const res = await verifyOtp(email.trim(), otp.trim());
       completeAuth(res);
     } catch (err: any) {
-      Alert.alert('Invalid code', err.response?.data?.error || 'The OTP code was not accepted.');
+      Alert.alert('Invalid code', err.response?.data?.error || err.message || 'The OTP code was not accepted.');
     } finally {
       setLoading(false);
     }

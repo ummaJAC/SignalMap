@@ -122,6 +122,50 @@ let trustReceiptsContract = null;
 let challengeManagerContract = null;
 let wallet = null;
 let provider = new ethers.JsonRpcProvider(FLOW_RPC);
+let signalProcessingQueue = Promise.resolve();
+
+function enqueueSignalProcessing(readingId, task) {
+    signalProcessingQueue = signalProcessingQueue
+        .catch((err) => {
+            console.error('Signal processing queue recovered after error:', err?.message || err);
+        })
+        .then(async () => {
+            console.log(`[reading:${readingId}] chain processing started`);
+            await task();
+        });
+    signalProcessingQueue.catch((err) => {
+        console.error(`[reading:${readingId}] chain processing queue error:`, err?.message || err);
+    });
+}
+
+async function sendSignalReward({ readingId, to, amountEth }) {
+    if (!wallet) return { status: 'skipped', txHash: null, error: 'deployer_wallet_unavailable' };
+    if (!to || !ethers.isAddress(to)) return { status: 'skipped', txHash: null, error: 'no_profile_wallet' };
+
+    const value = ethers.parseEther(String(amountEth));
+    try {
+        const rewardTx = await wallet.sendTransaction({ to, value });
+        const rewardReceipt = await rewardTx.wait();
+        if (rewardReceipt?.status === 1) {
+            return { status: 'paid', txHash: rewardReceipt.hash, error: null };
+        }
+        return { status: 'failed', txHash: rewardReceipt?.hash || rewardTx.hash, error: 'reward_receipt_failed' };
+    } catch (err) {
+        const replacement = err?.replacement;
+        const receipt = err?.receipt;
+        const replacementMatches = replacement
+            && replacement.to?.toLowerCase?.() === to.toLowerCase()
+            && BigInt(replacement.value || 0) === value;
+        if (err?.code === 'TRANSACTION_REPLACED' && replacementMatches && receipt?.status === 1) {
+            return { status: 'paid', txHash: receipt.hash || replacement.hash, error: null };
+        }
+        return {
+            status: 'failed',
+            txHash: receipt?.hash || replacement?.hash || null,
+            error: err?.shortMessage || err?.reason || err?.message || 'reward_payout_failed',
+        };
+    }
+}
 
 if (process.env.DEPLOYER_PRIVATE_KEY) {
     wallet = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, provider);
@@ -163,6 +207,24 @@ app.use('/api/auth', authRouter);
 // ============================
 // SignalMap Core Endpoints
 // ============================
+
+app.get('/api/speed/ping', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, ts: Date.now() });
+});
+
+app.get('/api/speed/download', (req, res) => {
+    const requested = Number(req.query.bytes || 200000);
+    const bytes = Math.max(1024, Math.min(Number.isFinite(requested) ? requested : 200000, 500000));
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.send(Buffer.alloc(bytes, 7));
+});
+
+app.post('/api/speed/upload', express.raw({ type: '*/*', limit: '1mb' }), (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, bytes: req.body?.length || 0, ts: Date.now() });
+});
 
 // Serve static Founder Dashboard
 app.get('/dashboard', (req, res) => {
@@ -1807,7 +1869,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
         const initialQualityStatus = speedDown != null || speedUp != null || latencyMs != null
             ? 'ok'
             : (speedError ? 'failed' : 'missing');
-        console.log(`Reading accepted: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} tech=${technology || networkType || 'Unknown'} quality=${initialQualityStatus} @ ${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`);
+        console.log(`Reading accepted: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} transport=${networkType || 'unknown'} tech=${technology || 'Unknown'} quality=${initialQualityStatus} @ ${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`);
 
         res.status(202).json({
             success: true,
@@ -1819,7 +1881,7 @@ app.post('/api/readings', requireAuth, async (req, res) => {
             bounty: 0,
         });
 
-        (async () => {
+        enqueueSignalProcessing(pendingReading.id, async () => {
             const failReading = async (message) => {
                 await supabaseAdmin.from('signal_readings')
                     .update({ status: 'failed', error_message: message })
@@ -1902,29 +1964,20 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                     return failReading(`db_update_failed:${readingError.message}`);
                 }
 
-                let rewardTxHash = null;
-                let rewardStatus = 'skipped';
-                let rewardError = null;
-                if (profile?.evm_address && wallet) {
-                    rewardStatus = 'pending';
-                    try {
-                        const rewardTx = await wallet.sendTransaction({
-                            to: profile.evm_address,
-                            value: ethers.parseEther(String(REWARD_PER_READING)),
-                        });
-                        const rewardReceipt = await rewardTx.wait();
-                        rewardTxHash = rewardReceipt.hash;
-                        rewardStatus = 'paid';
-                        console.log(`Signal reward paid: reading=${pendingReading.id} to=${profile.evm_address} amount=${REWARD_PER_READING} FLOW tx=${rewardTxHash}`);
-                    } catch (rewardErr) {
-                        rewardStatus = 'failed';
-                        rewardError = rewardErr.message || 'reward_payout_failed';
-                        console.error(`Signal reward failed: reading=${pendingReading.id} to=${profile.evm_address} error=${rewardError}`);
-                    }
-                } else if (!profile?.evm_address) {
-                    rewardError = 'no_profile_wallet';
-                } else if (!wallet) {
-                    rewardError = 'deployer_wallet_unavailable';
+                const rewardResult = await sendSignalReward({
+                    readingId: pendingReading.id,
+                    to: profile?.evm_address,
+                    amountEth: REWARD_PER_READING,
+                });
+                const rewardTxHash = rewardResult.txHash;
+                const rewardStatus = rewardResult.status;
+                const rewardError = rewardResult.error;
+                if (rewardStatus === 'paid') {
+                    console.log(`Signal reward paid: reading=${pendingReading.id} to=${profile.evm_address} amount=${REWARD_PER_READING} FLOW tx=${rewardTxHash}`);
+                } else if (rewardStatus === 'skipped') {
+                    console.warn(`Signal reward skipped: reading=${pendingReading.id} to=${profile?.evm_address || 'n/a'} reason=${rewardError}`);
+                } else {
+                    console.error(`Signal reward failed: reading=${pendingReading.id} to=${profile?.evm_address || 'n/a'} error=${rewardError}`);
                 }
 
                 const rewardUpdate = await supabaseAdmin.from('signal_readings')
@@ -1961,11 +2014,11 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                 const speedErrorLabel = speedError || 'none';
                 const signalLabel = signalDbm != null ? `${signalDbm}dBm` : 'n/a';
                 const cellDiagnostics = telemetryRaw?.native?.cellInfoUnavailable || 'ok';
-                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} tech=${technology || networkType || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} cellDiagnostics=${cellDiagnostics} reward=${rewardStatus} rewardTx=${rewardTxHash || 'n/a'} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
+                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} transport=${networkType || 'unknown'} tech=${technology || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} cellDiagnostics=${cellDiagnostics} reward=${rewardStatus} rewardTx=${rewardTxHash || 'n/a'} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
             } catch (err) {
                 await failReading(`processing_failed:${err.message}`);
             }
-        })();
+        });
     } catch (error) {
         console.error('Error saving reading:', error);
         res.status(500).json({ error: error.message });
