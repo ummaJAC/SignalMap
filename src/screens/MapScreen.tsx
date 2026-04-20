@@ -15,7 +15,7 @@ import {
   stopLocationWatcher,
 } from '../services/signalCollector';
 import { sendReading, getMapperStats, getReadingStatus, updateReadingTelemetry, healthCheck } from '../services/api';
-import { markReadingUploaded, shouldUploadReading, startBackgroundMapping, stopBackgroundMapping } from '../services/backgroundMapping';
+import { isBackgroundMappingActive, markReadingUploaded, shouldUploadReading, startBackgroundMapping, stopBackgroundMapping } from '../services/backgroundMapping';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
 const DEFAULT_CENTER = [30, 20];
@@ -47,6 +47,7 @@ export default function MapScreen() {
   const [sending, setSending] = useState(false);
   const [mapReady, setMapReady] = useState(false);
   const [mappingStatus, setMappingStatus] = useState('Waiting for next sample');
+  const [backgroundStatus, setBackgroundStatus] = useState<'unknown' | 'active' | 'unavailable'>('unknown');
   const cameraRef = useRef<Mapbox.Camera>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
@@ -316,12 +317,17 @@ export default function MapScreen() {
       void collectAndSend();
       void startBackgroundMapping().then((ok) => {
         if (!ok) {
+          setBackgroundStatus('unavailable');
+          setMappingStatus('Background permission unavailable');
           console.warn('Background mapping permission unavailable. Foreground mapping still active.');
+        } else {
+          setBackgroundStatus('active');
         }
       }).catch((err) => console.warn('Background mapping start failed:', err));
       intervalRef.current = setInterval(() => void collectAndSend(), 30000);
     } else {
       setMappingStatus('Waiting for next sample');
+      setBackgroundStatus('unknown');
       stopLocationWatcher();
       void stopBackgroundMapping().catch((err) => console.warn('Background mapping stop failed:', err));
       if (intervalRef.current) {
@@ -336,6 +342,16 @@ export default function MapScreen() {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [collectAndSend, isMapping, setLastKnownLocation]);
+
+  useEffect(() => {
+    if (!isMapping) return;
+    const iv = setInterval(() => {
+      isBackgroundMappingActive()
+        .then((active) => setBackgroundStatus(active ? 'active' : 'unavailable'))
+        .catch(() => setBackgroundStatus('unknown'));
+    }, 20000);
+    return () => clearInterval(iv);
+  }, [isMapping]);
 
   const fetchStats = useCallback(async () => {
     if (!token) return;
@@ -503,7 +519,7 @@ export default function MapScreen() {
                 </View>
               ) : null}
               <Text style={styles.hintText}>
-                Huawei/Honor: allow unrestricted battery for background mapping.
+                Background: {backgroundStatus === 'active' ? 'active' : (backgroundStatus === 'unavailable' ? 'permission needed' : 'starting')}. Huawei/Honor: allow unrestricted battery.
               </Text>
             </View>
           )}

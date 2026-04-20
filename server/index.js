@@ -2129,7 +2129,7 @@ app.get('/api/coverage', async (req, res) => {
         const { bounds, carrier, technology } = req.query;
 
         let query = supabaseAdmin.from('signal_readings')
-            .select('lat, lng, carrier, network_operator, technology, network_type, signal_dbm, dbm, rsrp, wifi_count, created_at');
+            .select('user_id, lat, lng, carrier, sim_operator, network_operator, technology, network_type, signal_dbm, dbm, rsrp, rsrq, sinr, speed_down, speed_up, latency_ms, wifi_count, wifi_ssid, status, created_at');
 
         if (carrier && carrier !== 'all') {
             query = query.eq('carrier', carrier);
@@ -2145,20 +2145,78 @@ app.get('/api/coverage', async (req, res) => {
         const grid = {};
         for (const r of (readings || [])) {
             const key = `${(Math.floor(r.lat / gridSize) * gridSize).toFixed(3)},${(Math.floor(r.lng / gridSize) * gridSize).toFixed(3)}`;
-            if (!grid[key]) grid[key] = { lat: 0, lng: 0, count: 0, totalSignal: 0, carriers: new Set() };
+            if (!grid[key]) {
+                grid[key] = {
+                    lat: 0,
+                    lng: 0,
+                    count: 0,
+                    confirmed: 0,
+                    users: new Set(),
+                    totalSignal: 0,
+                    signalCount: 0,
+                    totalDownload: 0,
+                    downloadCount: 0,
+                    totalUpload: 0,
+                    uploadCount: 0,
+                    totalLatency: 0,
+                    latencyCount: 0,
+                    wifiSamples: 0,
+                    mobileSamples: 0,
+                    carriers: new Set(),
+                    technologies: new Set(),
+                    latestAt: null,
+                };
+            }
+            const cell = grid[key];
             grid[key].lat += r.lat;
             grid[key].lng += r.lng;
             grid[key].count++;
-            grid[key].totalSignal += (r.rsrp || r.signal_dbm || r.dbm || -100);
-            if (r.network_operator || r.carrier) grid[key].carriers.add(r.network_operator || r.carrier);
+            if (r.status === 'confirmed') cell.confirmed++;
+            if (r.user_id) cell.users.add(r.user_id);
+
+            const signalValue = r.rsrp ?? r.signal_dbm ?? r.dbm;
+            if (Number.isFinite(Number(signalValue))) {
+                cell.totalSignal += Number(signalValue);
+                cell.signalCount++;
+            }
+            if (Number.isFinite(Number(r.speed_down))) {
+                cell.totalDownload += Number(r.speed_down);
+                cell.downloadCount++;
+            }
+            if (Number.isFinite(Number(r.speed_up))) {
+                cell.totalUpload += Number(r.speed_up);
+                cell.uploadCount++;
+            }
+            if (Number.isFinite(Number(r.latency_ms))) {
+                cell.totalLatency += Number(r.latency_ms);
+                cell.latencyCount++;
+            }
+
+            const transport = String(r.network_type || '').toLowerCase();
+            const isWifi = transport.includes('wifi') || r.wifi_ssid || Number(r.wifi_count || 0) > 0;
+            if (isWifi) cell.wifiSamples++;
+            else cell.mobileSamples++;
+            if (r.network_operator || r.carrier || r.sim_operator) cell.carriers.add(r.network_operator || r.carrier || r.sim_operator);
+            if (r.technology) cell.technologies.add(r.technology);
+            if (!cell.latestAt || new Date(r.created_at) > new Date(cell.latestAt)) cell.latestAt = r.created_at;
         }
 
         const heatmap = Object.values(grid).map(g => ({
             lat: g.lat / g.count,
             lng: g.lng / g.count,
             count: g.count,
-            avgSignal: Math.round(g.totalSignal / g.count),
+            confirmed: g.confirmed,
+            users: g.users.size,
+            avgSignal: g.signalCount ? Math.round(g.totalSignal / g.signalCount) : null,
+            avgDownload: g.downloadCount ? Math.round((g.totalDownload / g.downloadCount) * 10) / 10 : null,
+            avgUpload: g.uploadCount ? Math.round((g.totalUpload / g.uploadCount) * 10) / 10 : null,
+            avgLatency: g.latencyCount ? Math.round(g.totalLatency / g.latencyCount) : null,
+            wifiSamples: g.wifiSamples,
+            mobileSamples: g.mobileSamples,
             carriers: [...g.carriers],
+            technologies: [...g.technologies],
+            latestAt: g.latestAt,
+            freshnessMinutes: g.latestAt ? Math.round((Date.now() - new Date(g.latestAt).getTime()) / 60000) : null,
         }));
 
         res.set('X-402-Payment-Required', '0.01');
@@ -2166,7 +2224,7 @@ app.get('/api/coverage', async (req, res) => {
         res.set('X-402-Amount', '0.01');
         res.set('X-402-Recipient', DEPLOYER_ADDRESS || '');
 
-        res.json({ heatmap, total: heatmap.length });
+        res.json({ heatmap, total: heatmap.length, gridSize });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

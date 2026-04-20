@@ -1,6 +1,7 @@
-﻿import AsyncStorage from '@react-native-async-storage/async-storage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { collectBaseSignalDataForLocation } from './signalCollector';
 import { sendReading, setAuthToken } from './api';
 
@@ -73,13 +74,17 @@ export async function startBackgroundMapping(): Promise<boolean> {
   const bg = await Location.requestBackgroundPermissionsAsync();
   if (bg.status !== 'granted') return false;
 
+  await requestNotificationPermissionBestEffort();
+
   const alreadyStarted = await Location.hasStartedLocationUpdatesAsync(SIGNALMAP_BACKGROUND_LOCATION_TASK);
   if (alreadyStarted) return true;
 
   await Location.startLocationUpdatesAsync(SIGNALMAP_BACKGROUND_LOCATION_TASK, {
-    accuracy: Location.Accuracy.Balanced,
+    accuracy: Location.Accuracy.High,
     timeInterval: 30000,
-    distanceInterval: 25,
+    distanceInterval: 0,
+    deferredUpdatesInterval: 30000,
+    deferredUpdatesDistance: 0,
     pausesUpdatesAutomatically: false,
     foregroundService: {
       notificationTitle: 'SignalMap is mapping coverage',
@@ -91,9 +96,24 @@ export async function startBackgroundMapping(): Promise<boolean> {
   return true;
 }
 
+async function requestNotificationPermissionBestEffort(): Promise<void> {
+  if (Platform.OS !== 'android' || Number(Platform.Version) < 33) return;
+  try {
+    await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+  } catch {}
+}
+
 export async function stopBackgroundMapping(): Promise<void> {
   const started = await Location.hasStartedLocationUpdatesAsync(SIGNALMAP_BACKGROUND_LOCATION_TASK);
   if (started) {
     await Location.stopLocationUpdatesAsync(SIGNALMAP_BACKGROUND_LOCATION_TASK);
+  }
+}
+
+export async function isBackgroundMappingActive(): Promise<boolean> {
+  try {
+    return await Location.hasStartedLocationUpdatesAsync(SIGNALMAP_BACKGROUND_LOCATION_TASK);
+  } catch {
+    return false;
   }
 }
