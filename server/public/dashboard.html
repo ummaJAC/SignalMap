@@ -144,6 +144,8 @@
     const emailKey = 'signalmap_admin_email';
     let map;
     let cellLayer;
+    let baseLayer;
+    let publicConfigPromise;
 
     const $ = (id) => document.getElementById(id);
     const token = () => localStorage.getItem(tokenKey);
@@ -249,18 +251,47 @@
       return '#ef4444';
     }
 
-    function initMap(cells) {
+    async function getPublicConfig() {
+      if (!publicConfigPromise) {
+        publicConfigPromise = fetch('/api/public-config')
+          .then((res) => res.ok ? res.json() : {})
+          .catch(() => ({}));
+      }
+      return publicConfigPromise;
+    }
+
+    async function addBaseLayer() {
+      const config = await getPublicConfig();
+      if (baseLayer) baseLayer.remove();
+
+      if (config.mapboxToken) {
+        baseLayer = L.tileLayer(`https://api.mapbox.com/styles/v1/mapbox/light-v11/tiles/512/{z}/{x}/{y}@2x?access_token=${config.mapboxToken}`, {
+          tileSize: 512,
+          zoomOffset: -1,
+          attribution: '&copy; Mapbox &copy; OpenStreetMap',
+          maxZoom: 20,
+        }).addTo(map);
+        return;
+      }
+
+      baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        maxZoom: 20,
+      }).addTo(map);
+    }
+
+    async function initMap(cells) {
       const first = cells[0] || { lat: 59.7385, lng: 30.3068 };
       if (!map) {
         map = L.map('coverage-map').setView([first.lat, first.lng], cells.length ? 11 : 4);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-          attribution: '&copy; OpenStreetMap &copy; CARTO'
-        }).addTo(map);
+        await addBaseLayer();
       }
       if (cellLayer) cellLayer.remove();
       cellLayer = L.layerGroup().addTo(map);
+      const bounds = [];
       cells.forEach((cell) => {
         const color = cellColor(cell);
+        bounds.push([cell.lat, cell.lng]);
         const marker = L.circleMarker([cell.lat, cell.lng], {
           radius: Math.min(28, 8 + Math.sqrt(cell.count || 1) * 4),
           fillColor: color,
@@ -279,7 +310,16 @@
           Freshness: ${fmt(cell.freshnessMinutes)} min
         </div>`);
       });
-      if (cells.length) map.setView([first.lat, first.lng], 11);
+      setTimeout(() => {
+        map.invalidateSize();
+        if (bounds.length > 1) {
+          map.fitBounds(bounds, { padding: [42, 42], maxZoom: 13 });
+        } else if (bounds.length === 1) {
+          map.setView(bounds[0], 12);
+        } else {
+          map.setView([first.lat, first.lng], 4);
+        }
+      }, 80);
     }
 
     function renderFeed(rows) {
@@ -338,9 +378,9 @@
         renderStats(overview.summary || {});
         renderFeed(readings.data || []);
         renderUsers(users.data || []);
-        initMap(coverage.heatmap || []);
-        $('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
         showDashboard(true);
+        await initMap(coverage.heatmap || []);
+        $('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
       } catch (err) {
         if (String(err.message || '').includes('admin') || String(err.message || '').includes('Forbidden') || String(err.message || '').includes('configured')) {
           localStorage.removeItem(tokenKey);

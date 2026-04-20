@@ -333,6 +333,13 @@ app.post('/api/speed/upload', express.raw({ type: '*/*', limit: '1mb' }), (req, 
     res.json({ ok: true, bytes: req.body?.length || 0, ts: Date.now() });
 });
 
+app.get('/api/public-config', (req, res) => {
+    const mapboxToken = process.env.MAPBOX_PUBLIC_TOKEN || process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
+    res.json({
+        mapboxToken: mapboxToken.startsWith('pk.') ? mapboxToken : null,
+    });
+});
+
 // Serve static Founder Dashboard
 app.get('/dashboard', (req, res) => {
     res.sendFile(join(__dirname, 'public', 'dashboard.html'));
