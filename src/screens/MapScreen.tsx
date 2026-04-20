@@ -382,7 +382,7 @@ export default function MapScreen() {
           <View style={styles.statusBar}>
             <View style={styles.pulseDot} />
             <Text style={styles.statusText}>
-              MAPPING{sending ? ' - Sending...' : ''} - {readings.length} points
+              SESSION {readings.length} / TOTAL {totalReadings}{sending ? ' - Sending...' : ''}
             </Text>
           </View>
 

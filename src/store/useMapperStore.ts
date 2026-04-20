@@ -100,6 +100,11 @@ interface MapperState {
   totalReadings: number;
   signalBalance: number;
   flowBalance: number;
+  confirmedReadings: number;
+  pendingReadings: number;
+  failedReadings: number;
+  pendingRewards: number;
+  failedRewards: number;
   lastReward: LastReward | null;
   lastKnownLocation: LastKnownLocation | null;
 
@@ -109,7 +114,18 @@ interface MapperState {
   setIsMapping: (val: boolean) => void;
   addReading: (r: SignalReading) => void;
   setBalances: (signal: number, flow: number) => void;
-  setStats: (stats: { signalBalance?: number; flowBalance?: string | number; readings?: number; evmAddress?: string | null; lastReward?: LastReward | null }) => void;
+  setStats: (stats: {
+    signalBalance?: number;
+    flowBalance?: string | number;
+    readings?: number;
+    confirmedReadings?: number;
+    pendingReadings?: number;
+    failedReadings?: number;
+    pendingRewards?: number;
+    failedRewards?: number;
+    evmAddress?: string | null;
+    lastReward?: LastReward | null;
+  }) => void;
   setLastKnownLocation: (loc: LastKnownLocation) => void;
   reset: () => void;
 }
@@ -124,6 +140,11 @@ const initialState = {
   totalReadings: 0,
   signalBalance: 0,
   flowBalance: 0,
+  confirmedReadings: 0,
+  pendingReadings: 0,
+  failedReadings: 0,
+  pendingRewards: 0,
+  failedRewards: 0,
   lastReward: null as LastReward | null,
   lastKnownLocation: null as LastKnownLocation | null,
 };
@@ -143,16 +164,19 @@ const useMapperStore = create<MapperState>()(
       setIsMapping: (isMapping) => set({ isMapping }),
       addReading: (r) => set((s) => ({
         readings: [r, ...s.readings].slice(0, 100),
-        totalReadings: s.totalReadings + 1,
-        signalBalance: s.signalBalance + r.bounty,
       })),
       setBalances: (signalBalance, flowBalance) => set({ signalBalance, flowBalance }),
       setStats: (stats) => set((s) => ({
         signalBalance: stats.signalBalance ?? s.signalBalance,
         flowBalance: stats.flowBalance != null ? parseFloat(String(stats.flowBalance)) : s.flowBalance,
         totalReadings: stats.readings ?? s.totalReadings,
+        confirmedReadings: stats.confirmedReadings ?? s.confirmedReadings,
+        pendingReadings: stats.pendingReadings ?? s.pendingReadings,
+        failedReadings: stats.failedReadings ?? s.failedReadings,
+        pendingRewards: stats.pendingRewards ?? s.pendingRewards,
+        failedRewards: stats.failedRewards ?? s.failedRewards,
         evmAddress: stats.evmAddress ?? s.evmAddress,
-        lastReward: stats.lastReward ?? s.lastReward,
+        lastReward: Object.prototype.hasOwnProperty.call(stats, 'lastReward') ? (stats.lastReward ?? null) : s.lastReward,
       })),
       setLastKnownLocation: (lastKnownLocation) => set({ lastKnownLocation }),
       reset: () => set({ ...initialState }),

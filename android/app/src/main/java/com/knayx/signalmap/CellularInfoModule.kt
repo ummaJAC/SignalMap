@@ -17,6 +17,7 @@ import android.telephony.CellInfoGsm
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellInfoWcdma
+import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import com.facebook.react.bridge.Arguments
@@ -54,6 +55,8 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
 
     private fun addTelephonyInfo(map: WritableMap) {
         val telephonyManager = reactApplicationContext.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        val hasFineLocation = hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+        val hasReadPhoneState = hasPermission(Manifest.permission.READ_PHONE_STATE)
 
         val networkOperatorName = telephonyManager.networkOperatorName
         val simOperatorName = telephonyManager.simOperatorName
@@ -65,6 +68,8 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
         map.putString("carrier", safeString(networkOperatorName).ifBlank { safeString(simOperatorName) })
         map.putString("networkOperator", safeString(networkOperator))
         map.putString("simOperator", safeString(simOperator))
+        map.putBoolean("locationPermission", hasFineLocation)
+        map.putBoolean("phonePermission", hasReadPhoneState)
 
         parseMccMnc(networkOperator).let {
             if (it.first != null) map.putString("mcc", it.first)
@@ -74,18 +79,34 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
         val networkType = telephonyManager.dataNetworkType.takeIf { it != TelephonyManager.NETWORK_TYPE_UNKNOWN }
             ?: telephonyManager.networkType
         val networkTypeName = networkTypeName(networkType)
+        map.putInt("telephonyNetworkType", networkType)
+        map.putString("activeNetworkType", networkTypeName)
         map.putString("networkType", networkTypeName)
         map.putString("cellularGeneration", generationFromNetworkType(networkType))
         map.putString("technology", generationFromNetworkType(networkType))
 
-        if (!hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)) {
+        if (!hasFineLocation) {
             map.putString("cellularPermission", "missing_location")
+            map.putString("cellInfoUnavailable", "missing_location_permission")
             return
         }
 
-        val cellInfoList = telephonyManager.allCellInfo ?: emptyList()
+        val cellInfoList = try {
+            telephonyManager.allCellInfo ?: emptyList()
+        } catch (e: SecurityException) {
+            map.putString("cellularPermission", "security_exception")
+            map.putString("cellInfoUnavailable", "security_exception:${e.message ?: "unknown"}")
+            emptyList()
+        } catch (e: Exception) {
+            map.putString("cellInfoUnavailable", "all_cell_info_error:${e.message ?: "unknown"}")
+            emptyList()
+        }
         val cells = Arguments.createArray()
         val selected = cellInfoList.firstOrNull { it.isRegistered } ?: cellInfoList.firstOrNull()
+        map.putInt("cellInfoCount", cellInfoList.size)
+        if (cellInfoList.isEmpty()) {
+            map.putString("cellInfoUnavailable", "empty_all_cell_info")
+        }
 
         for (cellInfo in cellInfoList.take(8)) {
             cells.pushMap(cellInfoToMap(cellInfo))
@@ -100,9 +121,11 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
 
     private fun addWifiInfo(map: WritableMap) {
         if (!hasPermission(Manifest.permission.ACCESS_WIFI_STATE)) {
+            map.putBoolean("wifiStatePermission", false)
             map.putString("wifiPermission", "missing_access_wifi_state")
             return
         }
+        map.putBoolean("wifiStatePermission", true)
 
         val wifiManager = reactApplicationContext.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
             ?: return
@@ -193,6 +216,11 @@ class CellularInfoModule(reactContext: ReactApplicationContext) : ReactContextBa
                     putStringIfNotBlank(map, "mcc", identity.mccString)
                     putStringIfNotBlank(map, "mnc", identity.mncString)
                     putSignal(map, signal.dbm, signal.asuLevel)
+                    if (signal is CellSignalStrengthNr) {
+                        putIntIfValid(map, "rsrp", signal.ssRsrp)
+                        putIntIfValid(map, "rsrq", signal.ssRsrq)
+                        putIntIfValid(map, "sinr", signal.ssSinr)
+                    }
                     map.putString("technology", "5G")
                     map.putString("cellularGeneration", "5G")
                 }

@@ -175,7 +175,25 @@ app.get('/api/admin/raw-data', requireAuth, async (req, res) => {
     try {
         const { data, error } = await supabaseAdmin.from('signal_readings').select('*').order('created_at', { ascending: false }).limit(500);
         if (error) throw error;
-        res.json({ success: true, count: data.length, data });
+        const rows = data || [];
+        const speedSamples = rows.map((row) => Number(row.speed_down)).filter((value) => Number.isFinite(value));
+        const latencySamples = rows.map((row) => Number(row.latency_ms)).filter((value) => Number.isFinite(value));
+        const operators = [...new Set(rows.map((row) => row.network_operator || row.carrier || row.sim_operator).filter(Boolean))];
+        const mobileRows = rows.filter((row) => !row.wifi_ssid && Number(row.wifi_count || 0) === 0);
+        const wifiRows = rows.filter((row) => row.wifi_ssid || Number(row.wifi_count || 0) > 0);
+        const summary = {
+            samples: rows.length,
+            confirmed: rows.filter((row) => row.status === 'confirmed').length,
+            pending: rows.filter((row) => row.status === 'pending').length,
+            failed: rows.filter((row) => row.status === 'failed').length,
+            rewardsPaid: rows.filter((row) => row.reward_status === 'paid').length,
+            avgDownload: speedSamples.length ? Math.round((speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length) * 10) / 10 : null,
+            avgLatency: latencySamples.length ? Math.round(latencySamples.reduce((a, b) => a + b, 0) / latencySamples.length) : null,
+            operators,
+            wifiSamples: wifiRows.length,
+            mobileSamples: mobileRows.length,
+        };
+        res.json({ success: true, count: rows.length, summary, data: rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -1942,7 +1960,8 @@ app.post('/api/readings', requireAuth, async (req, res) => {
                 const speedSourceLabel = speedSource || 'unknown';
                 const speedErrorLabel = speedError || 'none';
                 const signalLabel = signalDbm != null ? `${signalDbm}dBm` : 'n/a';
-                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} tech=${technology || networkType || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} reward=${rewardStatus} rewardTx=${rewardTxHash || 'n/a'} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
+                const cellDiagnostics = telemetryRaw?.native?.cellInfoUnavailable || 'ok';
+                console.log(`Reading confirmed: id=${pendingReading.id} operator=${networkOperator || carrier || 'Unknown'} sim=${simOperator || 'n/a'} tech=${technology || networkType || 'Unknown'} signal=${signalLabel} rsrp=${rsrp ?? 'n/a'} rsrq=${rsrq ?? 'n/a'} sinr=${sinr ?? 'n/a'} cell=${cellId ?? 'n/a'} tac=${tac ?? lac ?? 'n/a'} pci=${pci ?? psc ?? 'n/a'} wifiSsid=${wifiSsid || 'n/a'} wifiRssi=${wifiRssi ?? 'n/a'} speedDown=${speedLabel} speedUp=${uploadLabel} latency=${latencyLabel} speedSource=${speedSourceLabel} speedError=${speedErrorLabel} cellDiagnostics=${cellDiagnostics} reward=${rewardStatus} rewardTx=${rewardTxHash || 'n/a'} wifiCount=${wifiCount || 0} @ ${lat.toFixed(4)},${lng.toFixed(4)} -> +${REWARD_PER_READING} FLOW tx=${trustReceiptTx || 'n/a'}`);
             } catch (err) {
                 await failReading(`processing_failed:${err.message}`);
             }
@@ -2139,7 +2158,7 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
 
         const { data: readingRows, error: readingsError, count: readingCount } = await supabaseAdmin
             .from('signal_readings')
-            .select('status, bounty_paid', { count: 'exact' })
+            .select('status, bounty_paid, reward_status', { count: 'exact' })
             .eq('user_id', userId);
         if (readingsError) throw readingsError;
 
@@ -2148,7 +2167,8 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
             .from('signal_readings')
             .select('id, reward_tx_hash, reward_status, reward_error, created_at')
             .eq('user_id', userId)
-            .not('reward_status', 'is', null)
+            .eq('reward_status', 'paid')
+            .not('reward_tx_hash', 'is', null)
             .order('created_at', { ascending: false })
             .limit(1);
         if (!rewardError && rewardRows?.length) {
@@ -2165,6 +2185,8 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
         const confirmedReadings = readings.filter((reading) => reading.status === 'confirmed');
         const pendingReadings = readings.filter((reading) => reading.status === 'pending').length;
         const failedReadings = readings.filter((reading) => reading.status === 'failed').length;
+        const pendingRewards = readings.filter((reading) => reading.reward_status === 'pending').length;
+        const failedRewards = readings.filter((reading) => reading.reward_status === 'failed').length;
         const ledgerBalance = confirmedReadings.reduce((sum, reading) => (
             sum + Number(reading.bounty_paid || 0)
         ), 0);
@@ -2181,8 +2203,11 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
         res.json({
             readings: readingCount || 0,
             signalBalance,
+            confirmedReadings: confirmedReadings.length,
             pendingReadings,
             failedReadings,
+            pendingRewards,
+            failedRewards,
             flowBalance,
             evmAddress: profile?.evm_address || null,
             lastReward,

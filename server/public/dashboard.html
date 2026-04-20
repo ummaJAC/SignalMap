@@ -20,7 +20,7 @@
                 <h1 class="text-3xl font-black text-slate-800 tracking-tight">SignalMap <span class="text-emerald-500">B2B Engine</span></h1>
                 <p class="text-slate-500 font-medium">Live operator-grade coverage telemetry</p>
             </div>
-            <div class="grid grid-cols-3 gap-4 w-full lg:w-auto">
+            <div class="grid grid-cols-3 lg:grid-cols-6 gap-4 w-full lg:w-auto">
                 <div class="text-right">
                     <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Total Points</p>
                     <p class="text-2xl font-black text-slate-800" id="stat-total">0</p>
@@ -32,6 +32,18 @@
                 <div class="text-right">
                     <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Avg Down</p>
                     <p class="text-2xl font-black text-sky-600" id="stat-speed">0 Mbps</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Avg Latency</p>
+                    <p class="text-2xl font-black text-indigo-600" id="stat-latency">0 ms</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Mobile/Wi-Fi</p>
+                    <p class="text-2xl font-black text-slate-800" id="stat-split">0/0</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Operators</p>
+                    <p class="text-2xl font-black text-emerald-600" id="stat-operators">0</p>
                 </div>
             </div>
         </header>
@@ -85,12 +97,16 @@
                 });
                 const body = await res.json();
                 const data = body.data || [];
+                const summary = body.summary || {};
 
-                document.getElementById('stat-total').innerText = data.length;
-                document.getElementById('stat-confirmed').innerText = data.filter(d => d.status === 'confirmed').length;
+                document.getElementById('stat-total').innerText = summary.samples ?? data.length;
+                document.getElementById('stat-confirmed').innerText = summary.confirmed ?? data.filter(d => d.status === 'confirmed').length;
                 const speedSamples = data.map(d => numberOrNull(d.speed_down)).filter(v => v != null);
                 const avgSpeed = speedSamples.length ? (speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length).toFixed(1) : '0';
-                document.getElementById('stat-speed').innerText = `${avgSpeed} Mbps`;
+                document.getElementById('stat-speed').innerText = `${summary.avgDownload ?? avgSpeed} Mbps`;
+                document.getElementById('stat-latency').innerText = `${summary.avgLatency ?? 0} ms`;
+                document.getElementById('stat-split').innerText = `${summary.mobileSamples ?? 0}/${summary.wifiSamples ?? 0}`;
+                document.getElementById('stat-operators').innerText = (summary.operators || []).length;
 
                 const heatPoints = data
                     .filter(d => d.lat != null && d.lng != null)
@@ -104,6 +120,7 @@
                     const color = signal == null ? 'text-slate-500' : (signal > -85 ? 'text-emerald-500' : (signal > -105 ? 'text-amber-500' : 'text-red-500'));
                     const statusColor = d.status === 'confirmed' ? 'bg-emerald-100 text-emerald-700' : (d.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700');
                     const tx = d.trust_receipt_tx ? `<a class="text-emerald-600 underline" href="https://evm-testnet.flowscan.io/tx/${htmlEscape(d.trust_receipt_tx)}" target="_blank" rel="noreferrer">tx</a>` : 'tx pending';
+                    const rewardTx = d.reward_tx_hash ? `<a class="text-sky-600 underline" href="https://evm-testnet.flowscan.io/tx/${htmlEscape(d.reward_tx_hash)}" target="_blank" rel="noreferrer">reward tx</a>` : (d.reward_status || 'reward pending');
                     const operator = htmlEscape(d.network_operator || d.carrier || 'Unknown');
                     const sim = htmlEscape(d.sim_operator || 'SIM n/a');
                     const tech = htmlEscape(d.technology || d.network_type || 'N/A');
@@ -126,6 +143,8 @@
                                 <p class="text-xs text-slate-400 font-mono mt-1">${radio}</p>
                                 <p class="text-xs text-slate-400 font-mono mt-1">${cell}</p>
                                 <p class="text-[10px] text-slate-400 font-mono mt-1">receipt: ${htmlEscape(d.trust_receipt_id || 'pending')} · ${tx}</p>
+                                <p class="text-[10px] text-slate-400 font-mono mt-1">reward: ${htmlEscape(d.reward_status || 'pending')} · ${rewardTx}</p>
+                                ${d.telemetry_raw?.native?.cellInfoUnavailable ? `<p class="text-[10px] text-amber-600 font-mono mt-1">cell diagnostics: ${htmlEscape(d.telemetry_raw.native.cellInfoUnavailable)}</p>` : ''}
                                 ${d.error_message ? `<p class="text-[10px] text-red-500 font-mono mt-1">${htmlEscape(d.error_message)}</p>` : ''}
                             </div>
                         </div>

@@ -21,6 +21,11 @@ export default function ProfileScreen() {
     signalBalance,
     flowBalance,
     totalReadings,
+    confirmedReadings,
+    pendingReadings,
+    failedReadings,
+    pendingRewards,
+    failedRewards,
     evmAddress,
     lastReward,
     setStats,
@@ -125,7 +130,7 @@ export default function ProfileScreen() {
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Earned ledger FLOW</Text>
           <Text style={styles.cardValue}>{signalBalance.toFixed(4)}</Text>
-          <Text style={styles.cardSub}>from {totalReadings} confirmed readings</Text>
+          <Text style={styles.cardSub}>from {confirmedReadings || totalReadings} confirmed readings</Text>
         </View>
 
         <View style={styles.card}>
@@ -149,8 +154,9 @@ export default function ProfileScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Last reward</Text>
-          <Text style={styles.rewardStatus}>{lastReward?.reward_status || 'No reward yet'}</Text>
+          <Text style={styles.rewardStatus}>{lastReward?.reward_status || 'No paid reward yet'}</Text>
           <Text style={styles.cardSub}>{lastReward?.reward_tx_hash || lastReward?.reward_error || 'Start mapping to receive real testnet payouts.'}</Text>
+          <Text style={styles.cardSub}>pending rewards: {pendingRewards} · failed rewards: {failedRewards}</Text>
           {lastReward?.reward_tx_hash ? (
             <TouchableOpacity style={styles.secondaryButtonWide} onPress={openLastReward}>
               <Text style={styles.secondaryText}>Open reward tx</Text>
@@ -161,7 +167,9 @@ export default function ProfileScreen() {
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Total readings</Text>
           <Text style={styles.cardValue}>{totalReadings}</Text>
-          <Text style={styles.cardSub}>{mapperRank}</Text>
+          <Text style={styles.cardSub}>
+            {mapperRank} · confirmed {confirmedReadings} · pending {pendingReadings} · failed {failedReadings}
+          </Text>
         </View>
 
         <TouchableOpacity style={styles.button} onPress={handleFaucet} activeOpacity={0.8}>
