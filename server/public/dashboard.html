@@ -1,162 +1,373 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SignalMap Founder Dashboard</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
-    <style>
-        body { background-color: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-        #map { height: 420px; border-radius: 12px; z-index: 1; }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SignalMap Operator Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    :root {
+      --ink: #10201b;
+      --muted: #66756f;
+      --line: rgba(16, 32, 27, 0.12);
+      --green: #15b86a;
+      --blue: #1570ef;
+      --amber: #f59e0b;
+      --red: #ef4444;
+    }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(21, 184, 106, 0.18), transparent 30%),
+        radial-gradient(circle at 100% 20%, rgba(21, 112, 239, 0.13), transparent 28%),
+        linear-gradient(135deg, #f4fbf7 0%, #eef7f7 46%, #f8fafc 100%);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #coverage-map { height: 520px; border-radius: 28px; z-index: 1; background: #e9f3ef; }
+    .glass {
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(255, 255, 255, 0.8);
+      box-shadow: 0 24px 80px rgba(15, 23, 42, 0.10);
+      backdrop-filter: blur(18px);
+    }
+    .chip { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.7); }
+    .leaflet-popup-content-wrapper { border-radius: 18px; }
+    .hide { display: none !important; }
+  </style>
 </head>
-<body class="p-6">
-    <div class="max-w-7xl mx-auto space-y-6">
-        <header class="flex flex-col lg:flex-row gap-4 justify-between items-start lg:items-center bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
-            <div>
-                <h1 class="text-3xl font-black text-slate-800 tracking-tight">SignalMap <span class="text-emerald-500">B2B Engine</span></h1>
-                <p class="text-slate-500 font-medium">Live operator-grade coverage telemetry</p>
-            </div>
-            <div class="grid grid-cols-3 lg:grid-cols-6 gap-4 w-full lg:w-auto">
-                <div class="text-right">
-                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Total Points</p>
-                    <p class="text-2xl font-black text-slate-800" id="stat-total">0</p>
-                </div>
-                <div class="text-right">
-                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Confirmed</p>
-                    <p class="text-2xl font-black text-emerald-600" id="stat-confirmed">0</p>
-                </div>
-                <div class="text-right">
-                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Avg Down</p>
-                    <p class="text-2xl font-black text-sky-600" id="stat-speed">0 Mbps</p>
-                </div>
-                <div class="text-right">
-                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Avg Latency</p>
-                    <p class="text-2xl font-black text-indigo-600" id="stat-latency">0 ms</p>
-                </div>
-                <div class="text-right">
-                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Mobile/Wi-Fi</p>
-                    <p class="text-2xl font-black text-slate-800" id="stat-split">0/0</p>
-                </div>
-                <div class="text-right">
-                    <p class="text-xs text-slate-500 uppercase font-bold tracking-wider">Operators</p>
-                    <p class="text-2xl font-black text-emerald-600" id="stat-operators">0</p>
-                </div>
-            </div>
-        </header>
-
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div class="col-span-2 bg-white p-2 rounded-2xl shadow-sm border border-slate-100">
-                <div id="map"></div>
-            </div>
-
-            <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
-                <h3 class="text-lg font-bold text-slate-800 mb-4">Latest Raw Readings</h3>
-                <div class="flex-1 overflow-y-auto space-y-3" id="feed-container" style="max-height: 380px;">
-                    <p class="text-sm text-slate-400 text-center mt-10">Loading DePIN data...</p>
-                </div>
-            </div>
+<body>
+  <main class="min-h-screen p-4 md:p-8">
+    <section id="login-view" class="min-h-[90vh] flex items-center justify-center">
+      <div class="glass w-full max-w-xl rounded-[32px] p-8 md:p-10">
+        <div class="mb-8">
+          <p class="text-sm font-black uppercase tracking-[0.32em] text-emerald-600">SignalMap Founder Access</p>
+          <h1 class="mt-3 text-4xl md:text-5xl font-black leading-tight">Coverage intelligence from real phones.</h1>
+          <p class="mt-4 text-slate-600 font-semibold leading-7">Login with the same email OTP flow. Admin emails must be configured in Railway via <span class="font-mono text-slate-800">ADMIN_EMAILS</span>.</p>
         </div>
-    </div>
 
-    <script>
-        const MOCK_TOKEN = 'dev-token-dashboard';
-        let map;
-        let heatLayer;
+        <div id="email-step" class="space-y-4">
+          <label class="block text-xs font-black uppercase tracking-[0.22em] text-slate-500">Admin email</label>
+          <input id="email-input" class="w-full rounded-2xl border border-slate-200 bg-white px-5 py-4 text-lg font-bold outline-none focus:border-emerald-400" type="email" placeholder="founder@example.com" />
+          <button id="send-code-btn" class="w-full rounded-2xl bg-emerald-500 px-5 py-4 font-black text-white shadow-lg shadow-emerald-200 transition hover:bg-emerald-600">Send code</button>
+        </div>
 
-        function numberOrNull(value) {
-            const parsed = Number(value);
-            return Number.isFinite(parsed) ? parsed : null;
+        <div id="otp-step" class="hide space-y-4">
+          <label class="block text-xs font-black uppercase tracking-[0.22em] text-slate-500">Email OTP code</label>
+          <input id="otp-input" class="w-full rounded-2xl border border-slate-200 bg-white px-5 py-4 text-lg font-bold outline-none focus:border-emerald-400" inputmode="numeric" placeholder="123456" />
+          <button id="verify-btn" class="w-full rounded-2xl bg-slate-900 px-5 py-4 font-black text-white shadow-lg shadow-slate-200 transition hover:bg-slate-800">Open dashboard</button>
+          <button id="back-email-btn" class="w-full rounded-2xl border border-slate-200 px-5 py-3 font-bold text-slate-600">Change email</button>
+        </div>
+        <p id="login-message" class="mt-5 min-h-6 text-sm font-bold text-slate-500"></p>
+      </div>
+    </section>
+
+    <section id="dashboard-view" class="hide mx-auto max-w-[1500px] space-y-6">
+      <header class="glass rounded-[32px] p-6 md:p-8">
+        <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+          <div>
+            <p class="text-sm font-black uppercase tracking-[0.32em] text-emerald-600">Operator view</p>
+            <h1 class="mt-2 text-4xl md:text-6xl font-black tracking-tight">SignalMap Coverage Intelligence</h1>
+            <p class="mt-3 max-w-3xl text-slate-600 font-semibold leading-7">Verified DePIN coverage intelligence from real mobile devices. Readings are rewarded on Flow EVM and backed by on-chain Trust Receipts.</p>
+          </div>
+          <div class="flex flex-wrap gap-3">
+            <button id="refresh-btn" class="rounded-2xl bg-slate-900 px-5 py-3 font-black text-white">Refresh</button>
+            <button id="logout-btn" class="rounded-2xl border border-slate-200 bg-white px-5 py-3 font-black text-slate-700">Log out</button>
+          </div>
+        </div>
+      </header>
+
+      <section class="grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8" id="stats-grid"></section>
+
+      <section class="grid grid-cols-1 gap-6 xl:grid-cols-3">
+        <div class="glass rounded-[32px] p-3 xl:col-span-2">
+          <div class="flex flex-col gap-3 px-3 pb-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h2 class="text-2xl font-black">Coverage cells</h2>
+              <p class="text-sm font-bold text-slate-500">Samples, mappers, speed, latency, freshness by area.</p>
+            </div>
+            <div class="flex flex-wrap gap-2 text-xs font-black uppercase tracking-wider text-slate-500">
+              <span class="chip rounded-full px-3 py-2">green: good</span>
+              <span class="chip rounded-full px-3 py-2">amber: slow/medium</span>
+              <span class="chip rounded-full px-3 py-2">red: weak/slow</span>
+            </div>
+          </div>
+          <div id="coverage-map"></div>
+        </div>
+
+        <div class="glass rounded-[32px] p-5">
+          <div class="mb-4 flex items-center justify-between">
+            <div>
+              <h2 class="text-2xl font-black">Live raw feed</h2>
+              <p class="text-sm font-bold text-slate-500">Latest rewarded network samples.</p>
+            </div>
+            <span id="feed-count" class="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-700">0</span>
+          </div>
+          <div id="feed" class="max-h-[520px] space-y-3 overflow-y-auto pr-1"></div>
+        </div>
+      </section>
+
+      <section class="glass rounded-[32px] p-5 md:p-6">
+        <div class="mb-5 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 class="text-2xl font-black">Mappers</h2>
+            <p class="text-sm font-bold text-slate-500">Wallets, earned FLOW, readings and last seen area.</p>
+          </div>
+          <p id="last-updated" class="text-xs font-black uppercase tracking-[0.2em] text-slate-400">Not loaded</p>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full min-w-[980px] border-separate border-spacing-y-2 text-left">
+            <thead class="text-xs uppercase tracking-[0.2em] text-slate-400">
+              <tr>
+                <th class="px-4 py-2">Mapper</th>
+                <th class="px-4 py-2">Wallet</th>
+                <th class="px-4 py-2">Readings</th>
+                <th class="px-4 py-2">Confirmed</th>
+                <th class="px-4 py-2">Earned</th>
+                <th class="px-4 py-2">Operators</th>
+                <th class="px-4 py-2">Last seen</th>
+                <th class="px-4 py-2">Last area</th>
+              </tr>
+            </thead>
+            <tbody id="users-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const FLOWSCAN = 'https://evm-testnet.flowscan.io';
+    const tokenKey = 'signalmap_admin_token';
+    const emailKey = 'signalmap_admin_email';
+    let map;
+    let cellLayer;
+
+    const $ = (id) => document.getElementById(id);
+    const token = () => localStorage.getItem(tokenKey);
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[ch]));
+    }
+
+    function fmt(value, fallback = 'n/a') {
+      return value === null || value === undefined || value === '' ? fallback : value;
+    }
+
+    function shortHash(value) {
+      if (!value) return 'n/a';
+      const str = String(value);
+      return str.length > 14 ? `${str.slice(0, 8)}...${str.slice(-6)}` : str;
+    }
+
+    function setMessage(text, tone = 'muted') {
+      const el = $('login-message');
+      el.textContent = text || '';
+      el.className = `mt-5 min-h-6 text-sm font-bold ${tone === 'error' ? 'text-red-600' : tone === 'ok' ? 'text-emerald-600' : 'text-slate-500'}`;
+    }
+
+    function showDashboard(show) {
+      $('login-view').classList.toggle('hide', show);
+      $('dashboard-view').classList.toggle('hide', !show);
+    }
+
+    async function api(path, options = {}) {
+      const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+      if (token()) headers.Authorization = `Bearer ${token()}`;
+      const res = await fetch(path, { ...options, headers });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+      return body;
+    }
+
+    async function sendCode() {
+      const email = $('email-input').value.trim().toLowerCase();
+      if (!email) return setMessage('Enter admin email.', 'error');
+      $('send-code-btn').disabled = true;
+      setMessage('Sending OTP...');
+      try {
+        await api('/api/auth/send-otp', { method: 'POST', body: JSON.stringify({ email }) });
+        localStorage.setItem(emailKey, email);
+        $('email-step').classList.add('hide');
+        $('otp-step').classList.remove('hide');
+        setMessage(`Code sent to ${email}.`, 'ok');
+      } catch (err) {
+        setMessage(err.message || 'Failed to send OTP.', 'error');
+      } finally {
+        $('send-code-btn').disabled = false;
+      }
+    }
+
+    async function verifyCode() {
+      const email = localStorage.getItem(emailKey) || $('email-input').value.trim().toLowerCase();
+      const code = $('otp-input').value.trim();
+      if (!email || !code) return setMessage('Enter email and OTP code.', 'error');
+      $('verify-btn').disabled = true;
+      setMessage('Verifying...');
+      try {
+        const res = await api('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, code, otp: code }) });
+        localStorage.setItem(tokenKey, res.token);
+        await loadDashboard();
+        showDashboard(true);
+      } catch (err) {
+        setMessage(err.message || 'Invalid code.', 'error');
+      } finally {
+        $('verify-btn').disabled = false;
+      }
+    }
+
+    function statCard(label, value, tone = 'slate', caption = '') {
+      const tones = {
+        slate: 'text-slate-900 bg-white', green: 'text-emerald-700 bg-emerald-50',
+        blue: 'text-blue-700 bg-blue-50', amber: 'text-amber-700 bg-amber-50', red: 'text-red-700 bg-red-50'
+      };
+      return `<div class="glass rounded-[24px] p-4 ${tones[tone] || tones.slate}">
+        <p class="text-[10px] font-black uppercase tracking-[0.22em] opacity-60">${escapeHtml(label)}</p>
+        <p class="mt-2 text-2xl font-black">${escapeHtml(value)}</p>
+        <p class="mt-1 text-xs font-bold opacity-60">${escapeHtml(caption)}</p>
+      </div>`;
+    }
+
+    function renderStats(summary) {
+      $('stats-grid').innerHTML = [
+        statCard('Samples', summary.samples ?? 0, 'slate', `${summary.confirmed ?? 0} confirmed`),
+        statCard('Mappers', summary.activeMappers ?? 0, 'green', 'unique devices/users'),
+        statCard('Avg down', `${summary.avgDownload ?? 'n/a'} Mbps`, 'blue', `up ${summary.avgUpload ?? 'n/a'} Mbps`),
+        statCard('Latency', `${summary.avgLatency ?? 'n/a'} ms`, 'amber', 'network quality'),
+        statCard('Rewards paid', summary.rewardsPaid ?? 0, 'green', `${summary.rewardsFailed ?? 0} failed`),
+        statCard('Operators', (summary.operators || []).length, 'slate', (summary.operators || []).join(', ') || 'none'),
+        statCard('Mobile', summary.mobileSamples ?? 0, 'blue', 'cellular samples'),
+        statCard('Wi-Fi', summary.wifiSamples ?? 0, 'amber', 'wifi samples'),
+      ].join('');
+    }
+
+    function cellColor(cell) {
+      if ((cell.avgDownload ?? 0) >= 5 && (cell.avgLatency ?? 999) <= 200) return '#15b86a';
+      if ((cell.avgDownload ?? 0) >= 1 || (cell.avgLatency ?? 999) <= 500) return '#f59e0b';
+      return '#ef4444';
+    }
+
+    function initMap(cells) {
+      const first = cells[0] || { lat: 59.7385, lng: 30.3068 };
+      if (!map) {
+        map = L.map('coverage-map').setView([first.lat, first.lng], cells.length ? 11 : 4);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+          attribution: '&copy; OpenStreetMap &copy; CARTO'
+        }).addTo(map);
+      }
+      if (cellLayer) cellLayer.remove();
+      cellLayer = L.layerGroup().addTo(map);
+      cells.forEach((cell) => {
+        const color = cellColor(cell);
+        const marker = L.circleMarker([cell.lat, cell.lng], {
+          radius: Math.min(28, 8 + Math.sqrt(cell.count || 1) * 4),
+          fillColor: color,
+          color,
+          weight: 2,
+          fillOpacity: 0.36,
+        }).addTo(cellLayer);
+        marker.bindPopup(`<div class="space-y-1 text-sm">
+          <b>Coverage cell</b><br />
+          Samples: ${cell.count} / users: ${cell.users ?? 0}<br />
+          Avg down: ${fmt(cell.avgDownload)} Mbps<br />
+          Avg up: ${fmt(cell.avgUpload)} Mbps<br />
+          Latency: ${fmt(cell.avgLatency)} ms<br />
+          Mobile/Wi-Fi: ${cell.mobileSamples ?? 0}/${cell.wifiSamples ?? 0}<br />
+          Operators: ${escapeHtml((cell.carriers || []).join(', ') || 'n/a')}<br />
+          Freshness: ${fmt(cell.freshnessMinutes)} min
+        </div>`);
+      });
+      if (cells.length) map.setView([first.lat, first.lng], 11);
+    }
+
+    function renderFeed(rows) {
+      $('feed-count').textContent = rows.length;
+      $('feed').innerHTML = rows.slice(0, 40).map((row) => {
+        const operator = row.network_operator || row.carrier || row.sim_operator || 'Unknown';
+        const transport = row.network_type || row.technology || 'unknown';
+        const statusTone = row.status === 'confirmed' ? 'bg-emerald-100 text-emerald-700' : row.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700';
+        const receipt = row.trust_receipt_tx ? `<a class="font-black text-emerald-700 underline" href="${FLOWSCAN}/tx/${escapeHtml(row.trust_receipt_tx)}" target="_blank">${shortHash(row.trust_receipt_tx)}</a>` : 'pending';
+        const reward = row.reward_tx_hash ? `<a class="font-black text-blue-700 underline" href="${FLOWSCAN}/tx/${escapeHtml(row.reward_tx_hash)}" target="_blank">${shortHash(row.reward_tx_hash)}</a>` : (row.reward_status || 'pending');
+        const cellDiag = row.telemetry_raw?.native?.cellInfoUnavailable ? `<p class="mt-1 text-[11px] font-bold text-amber-700">RF metrics unavailable: ${escapeHtml(row.telemetry_raw.native.cellInfoUnavailable)}</p>` : '';
+        return `<article class="rounded-2xl border border-slate-100 bg-white/80 p-4 shadow-sm">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="font-black text-slate-900">${escapeHtml(operator)} <span class="ml-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] uppercase tracking-wider text-slate-500">${escapeHtml(transport)}</span></p>
+              <p class="mt-1 text-xs font-bold text-slate-500">${escapeHtml(row.mapper_email || row.mapper_username || row.mapper_wallet_short || 'unknown mapper')}</p>
+            </div>
+            <span class="rounded-full px-2 py-1 text-[10px] font-black uppercase tracking-wider ${statusTone}">${escapeHtml(row.status || 'pending')}</span>
+          </div>
+          <div class="mt-3 grid grid-cols-2 gap-2 text-xs font-bold text-slate-600">
+            <span>Down: ${fmt(row.speed_down)} Mbps</span><span>Up: ${fmt(row.speed_up)} Mbps</span>
+            <span>Latency: ${fmt(row.latency_ms)} ms</span><span>Wi-Fi: ${escapeHtml(row.wifi_ssid || 'n/a')}</span>
+            <span>RSRP: ${fmt(row.rsrp)}</span><span>SINR: ${fmt(row.sinr)}</span>
+          </div>
+          ${cellDiag}
+          <div class="mt-3 border-t border-slate-100 pt-3 text-[11px] font-bold text-slate-500">
+            <p>${Number(row.lat).toFixed(4)}, ${Number(row.lng).toFixed(4)} - ${new Date(row.created_at).toLocaleString()}</p>
+            <p class="mt-1">TrustReceipt: ${receipt}</p>
+            <p class="mt-1">Reward: ${reward}</p>
+          </div>
+        </article>`;
+      }).join('') || '<p class="rounded-2xl bg-white/70 p-5 text-sm font-bold text-slate-500">No readings yet.</p>';
+    }
+
+    function renderUsers(users) {
+      $('users-body').innerHTML = users.map((user) => `<tr class="bg-white/80 shadow-sm">
+        <td class="rounded-l-2xl px-4 py-3"><p class="font-black text-slate-900">${escapeHtml(user.email || user.username || 'Unknown')}</p><p class="text-xs font-bold text-slate-400">${escapeHtml(user.id)}</p></td>
+        <td class="px-4 py-3 font-mono text-xs font-bold text-slate-600">${escapeHtml(user.walletShort || 'n/a')}</td>
+        <td class="px-4 py-3 font-black">${user.readings}</td>
+        <td class="px-4 py-3 font-black text-emerald-700">${user.confirmed}</td>
+        <td class="px-4 py-3 font-black text-emerald-700">${user.earnedFlow} FLOW</td>
+        <td class="px-4 py-3 text-sm font-bold text-slate-600">${escapeHtml((user.operators || []).join(', ') || 'n/a')}</td>
+        <td class="px-4 py-3 text-sm font-bold text-slate-500">${user.lastSeenAt ? new Date(user.lastSeenAt).toLocaleString() : 'n/a'}</td>
+        <td class="rounded-r-2xl px-4 py-3 font-mono text-xs font-bold text-slate-500">${user.lastLat ? Number(user.lastLat).toFixed(4) : 'n/a'}, ${user.lastLng ? Number(user.lastLng).toFixed(4) : 'n/a'}</td>
+      </tr>`).join('') || '<tr><td colspan="8" class="rounded-2xl bg-white/70 p-5 text-center font-bold text-slate-500">No mappers yet.</td></tr>';
+    }
+
+    async function loadDashboard() {
+      try {
+        const [overview, readings, users, coverage] = await Promise.all([
+          api('/api/admin/overview'),
+          api('/api/admin/readings?limit=250'),
+          api('/api/admin/users'),
+          fetch('/api/coverage').then((res) => res.json()),
+        ]);
+        renderStats(overview.summary || {});
+        renderFeed(readings.data || []);
+        renderUsers(users.data || []);
+        initMap(coverage.heatmap || []);
+        $('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        showDashboard(true);
+      } catch (err) {
+        if (String(err.message || '').includes('admin') || String(err.message || '').includes('Forbidden') || String(err.message || '').includes('configured')) {
+          localStorage.removeItem(tokenKey);
+          showDashboard(false);
+          setMessage(err.message, 'error');
+          return;
         }
+        throw err;
+      }
+    }
 
-        function htmlEscape(value) {
-            return String(value ?? '').replace(/[&<>'"]/g, (ch) => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
-            }[ch]));
-        }
+    $('send-code-btn').addEventListener('click', sendCode);
+    $('verify-btn').addEventListener('click', verifyCode);
+    $('back-email-btn').addEventListener('click', () => {
+      $('otp-step').classList.add('hide');
+      $('email-step').classList.remove('hide');
+      setMessage('');
+    });
+    $('refresh-btn').addEventListener('click', () => loadDashboard().catch((err) => alert(err.message)));
+    $('logout-btn').addEventListener('click', () => {
+      localStorage.removeItem(tokenKey);
+      showDashboard(false);
+      setMessage('Logged out.');
+    });
 
-        function initMap(points) {
-            if (!map) {
-                const first = points[0] || [31.2304, 121.4737, 0.5];
-                map = L.map('map').setView([first[0], first[1]], points.length ? 11 : 3);
-                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-                    attribution: '&copy; OpenStreetMap &copy; CARTO'
-                }).addTo(map);
-            }
-            if (heatLayer) heatLayer.remove();
-            heatLayer = L.heatLayer(points, { radius: 20, blur: 15, maxZoom: 17 }).addTo(map);
-        }
-
-        async function loadData() {
-            try {
-                const res = await fetch('/api/admin/raw-data', {
-                    headers: { 'Authorization': `Bearer ${MOCK_TOKEN}` }
-                });
-                const body = await res.json();
-                const data = body.data || [];
-                const summary = body.summary || {};
-
-                document.getElementById('stat-total').innerText = summary.samples ?? data.length;
-                document.getElementById('stat-confirmed').innerText = summary.confirmed ?? data.filter(d => d.status === 'confirmed').length;
-                const speedSamples = data.map(d => numberOrNull(d.speed_down)).filter(v => v != null);
-                const avgSpeed = speedSamples.length ? (speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length).toFixed(1) : '0';
-                document.getElementById('stat-speed').innerText = `${summary.avgDownload ?? avgSpeed} Mbps`;
-                document.getElementById('stat-latency').innerText = `${summary.avgLatency ?? 0} ms`;
-                document.getElementById('stat-split').innerText = `${summary.mobileSamples ?? 0}/${summary.wifiSamples ?? 0}`;
-                document.getElementById('stat-operators').innerText = (summary.operators || []).length;
-
-                const heatPoints = data
-                    .filter(d => d.lat != null && d.lng != null)
-                    .map(d => [Number(d.lat), Number(d.lng), Math.abs(numberOrNull(d.signal_dbm) || 90) / 100]);
-                initMap(heatPoints);
-
-                const feed = document.getElementById('feed-container');
-                feed.innerHTML = '';
-                data.slice(0, 20).forEach(d => {
-                    const signal = numberOrNull(d.signal_dbm ?? d.dbm);
-                    const color = signal == null ? 'text-slate-500' : (signal > -85 ? 'text-emerald-500' : (signal > -105 ? 'text-amber-500' : 'text-red-500'));
-                    const statusColor = d.status === 'confirmed' ? 'bg-emerald-100 text-emerald-700' : (d.status === 'failed' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700');
-                    const tx = d.trust_receipt_tx ? `<a class="text-emerald-600 underline" href="https://evm-testnet.flowscan.io/tx/${htmlEscape(d.trust_receipt_tx)}" target="_blank" rel="noreferrer">tx</a>` : 'tx pending';
-                    const rewardTx = d.reward_tx_hash ? `<a class="text-sky-600 underline" href="https://evm-testnet.flowscan.io/tx/${htmlEscape(d.reward_tx_hash)}" target="_blank" rel="noreferrer">reward tx</a>` : (d.reward_status || 'reward pending');
-                    const operator = htmlEscape(d.network_operator || d.carrier || 'Unknown');
-                    const sim = htmlEscape(d.sim_operator || 'SIM n/a');
-                    const tech = htmlEscape(d.technology || d.network_type || 'N/A');
-                    const wifi = d.wifi_ssid ? ` · Wi-Fi: ${htmlEscape(d.wifi_ssid)}` : '';
-                    const quality = `down ${d.speed_down != null ? htmlEscape(d.speed_down) + ' Mbps' : 'n/a'} · up ${d.speed_up != null ? htmlEscape(d.speed_up) + ' Mbps' : 'n/a'} · latency ${d.latency_ms != null ? htmlEscape(d.latency_ms) + ' ms' : 'n/a'}`;
-                    const radio = `RSRP ${d.rsrp ?? 'n/a'} / RSRQ ${d.rsrq ?? 'n/a'} / SINR ${d.sinr ?? 'n/a'}`;
-                    const cell = `cell ${htmlEscape(d.cell_id || 'n/a')} · TAC/LAC ${d.tac ?? d.lac ?? 'n/a'} · PCI/PSC ${d.pci ?? d.psc ?? 'n/a'}`;
-
-                    feed.innerHTML += `
-                        <div class="p-3 bg-slate-50 rounded-xl border border-slate-100 transition hover:bg-slate-100">
-                            <div class="flex justify-between gap-3">
-                                <div>
-                                    <p class="font-bold text-slate-700 text-sm">${operator} <span class="text-xs bg-slate-200 px-2 py-0.5 rounded-full ml-1">${tech}</span> <span class="text-xs px-2 py-0.5 rounded-full ml-1 ${statusColor}">${htmlEscape(d.status || 'pending')}</span></p>
-                                    <p class="text-[11px] text-slate-500 font-mono mt-1">${sim}${wifi}</p>
-                                </div>
-                                <div class="font-black ${color} text-right">${signal ?? 'n/a'} dBm</div>
-                            </div>
-                            <div class="mt-2">
-                                <p class="text-xs text-slate-500 font-mono">${Number(d.lat).toFixed(4)}, ${Number(d.lng).toFixed(4)} · ${quality}</p>
-                                <p class="text-xs text-slate-400 font-mono mt-1">${radio}</p>
-                                <p class="text-xs text-slate-400 font-mono mt-1">${cell}</p>
-                                <p class="text-[10px] text-slate-400 font-mono mt-1">receipt: ${htmlEscape(d.trust_receipt_id || 'pending')} · ${tx}</p>
-                                <p class="text-[10px] text-slate-400 font-mono mt-1">reward: ${htmlEscape(d.reward_status || 'pending')} · ${rewardTx}</p>
-                                ${d.telemetry_raw?.native?.cellInfoUnavailable ? `<p class="text-[10px] text-amber-600 font-mono mt-1">cell diagnostics: ${htmlEscape(d.telemetry_raw.native.cellInfoUnavailable)}</p>` : ''}
-                                ${d.error_message ? `<p class="text-[10px] text-red-500 font-mono mt-1">${htmlEscape(d.error_message)}</p>` : ''}
-                            </div>
-                        </div>
-                    `;
-                });
-            } catch (err) {
-                console.error('Failed to load data', err);
-            }
-        }
-
-        loadData();
-        setInterval(loadData, 15000);
-    </script>
+    if (localStorage.getItem(emailKey)) $('email-input').value = localStorage.getItem(emailKey);
+    if (token()) loadDashboard().catch((err) => { showDashboard(false); setMessage(err.message, 'error'); });
+  </script>
 </body>
 </html>

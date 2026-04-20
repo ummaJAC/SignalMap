@@ -75,6 +75,113 @@ const requireAuth = (req, res, next) => {
     }
 };
 
+function getAdminEmails() {
+    return String(process.env.ADMIN_EMAILS || process.env.ADMIN_EMAIL || process.env.FOUNDER_EMAIL || '')
+        .split(',')
+        .map((email) => email.trim().toLowerCase())
+        .filter(Boolean);
+}
+
+const requireAdmin = (req, res, next) => {
+    requireAuth(req, res, () => {
+        const adminEmails = getAdminEmails();
+        if (!adminEmails.length) {
+            return res.status(403).json({
+                error: 'Admin dashboard is not configured. Set ADMIN_EMAILS in Railway.',
+            });
+        }
+
+        const email = String(req.user?.email || '').toLowerCase();
+        if (!email || !adminEmails.includes(email)) {
+            return res.status(403).json({ error: 'Forbidden: admin access required' });
+        }
+        next();
+    });
+};
+
+function isSchemaCacheError(error) {
+    return /schema cache|column|Could not find/i.test(error?.message || '');
+}
+
+function roundNumber(value, digits = 1) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return null;
+    const factor = 10 ** digits;
+    return Math.round(number * factor) / factor;
+}
+
+function shortWallet(address) {
+    if (!address) return null;
+    const value = String(address);
+    return value.length > 12 ? `${value.slice(0, 6)}...${value.slice(-4)}` : value;
+}
+
+async function fetchAdminReadings(limit = 500) {
+    const maxLimit = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+    let { data, error } = await supabaseAdmin
+        .from('signal_readings')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(maxLimit);
+    if (error) throw error;
+    const rows = data || [];
+
+    const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))];
+    let profilesById = new Map();
+    if (userIds.length) {
+        const { data: profiles, error: profilesError } = await supabaseAdmin
+            .from('profiles')
+            .select('id, email, username, evm_address')
+            .in('id', userIds);
+        if (!profilesError) {
+            profilesById = new Map((profiles || []).map((profile) => [profile.id, profile]));
+        } else if (!isSchemaCacheError(profilesError)) {
+            console.warn(`Admin profile enrichment skipped: ${profilesError.message}`);
+        }
+    }
+
+    return rows.map((row) => {
+        const profile = profilesById.get(row.user_id) || {};
+        return {
+            ...row,
+            mapper_email: profile.email || null,
+            mapper_username: profile.username || null,
+            mapper_wallet: profile.evm_address || null,
+            mapper_wallet_short: shortWallet(profile.evm_address),
+        };
+    });
+}
+
+function buildCoverageSummary(rows) {
+    const speedSamples = rows.map((row) => Number(row.speed_down)).filter(Number.isFinite);
+    const uploadSamples = rows.map((row) => Number(row.speed_up)).filter(Number.isFinite);
+    const latencySamples = rows.map((row) => Number(row.latency_ms)).filter(Number.isFinite);
+    const operators = [...new Set(rows.map((row) => row.network_operator || row.carrier || row.sim_operator).filter(Boolean))];
+    const userIds = new Set(rows.map((row) => row.user_id).filter(Boolean));
+    const mobileRows = rows.filter((row) => !row.wifi_ssid && Number(row.wifi_count || 0) === 0);
+    const wifiRows = rows.filter((row) => row.wifi_ssid || Number(row.wifi_count || 0) > 0);
+    const lastReadingAt = rows[0]?.created_at || null;
+
+    return {
+        samples: rows.length,
+        confirmed: rows.filter((row) => row.status === 'confirmed').length,
+        pending: rows.filter((row) => row.status === 'pending').length,
+        failed: rows.filter((row) => row.status === 'failed').length,
+        rewardsPaid: rows.filter((row) => row.reward_status === 'paid').length,
+        rewardsPending: rows.filter((row) => row.reward_status === 'pending').length,
+        rewardsFailed: rows.filter((row) => row.reward_status === 'failed').length,
+        activeMappers: userIds.size,
+        avgDownload: speedSamples.length ? roundNumber(speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length, 1) : null,
+        avgUpload: uploadSamples.length ? roundNumber(uploadSamples.reduce((a, b) => a + b, 0) / uploadSamples.length, 1) : null,
+        avgLatency: latencySamples.length ? Math.round(latencySamples.reduce((a, b) => a + b, 0) / latencySamples.length) : null,
+        operators,
+        wifiSamples: wifiRows.length,
+        mobileSamples: mobileRows.length,
+        lastReadingAt,
+        freshnessMinutes: lastReadingAt ? Math.round((Date.now() - new Date(lastReadingAt).getTime()) / 60000) : null,
+    };
+}
+
 // --- OpenRouter AI Setup ---
 const openai = new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -232,29 +339,85 @@ app.get('/dashboard', (req, res) => {
 });
 app.use('/dashboard', express.static(join(__dirname, 'public')));
 
-// New endpoint specifically for the dashboard to pull raw data
-app.get('/api/admin/raw-data', requireAuth, async (req, res) => {
+app.get('/api/admin/overview', requireAdmin, async (req, res) => {
     try {
-        const { data, error } = await supabaseAdmin.from('signal_readings').select('*').order('created_at', { ascending: false }).limit(500);
-        if (error) throw error;
-        const rows = data || [];
-        const speedSamples = rows.map((row) => Number(row.speed_down)).filter((value) => Number.isFinite(value));
-        const latencySamples = rows.map((row) => Number(row.latency_ms)).filter((value) => Number.isFinite(value));
-        const operators = [...new Set(rows.map((row) => row.network_operator || row.carrier || row.sim_operator).filter(Boolean))];
-        const mobileRows = rows.filter((row) => !row.wifi_ssid && Number(row.wifi_count || 0) === 0);
-        const wifiRows = rows.filter((row) => row.wifi_ssid || Number(row.wifi_count || 0) > 0);
-        const summary = {
-            samples: rows.length,
-            confirmed: rows.filter((row) => row.status === 'confirmed').length,
-            pending: rows.filter((row) => row.status === 'pending').length,
-            failed: rows.filter((row) => row.status === 'failed').length,
-            rewardsPaid: rows.filter((row) => row.reward_status === 'paid').length,
-            avgDownload: speedSamples.length ? Math.round((speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length) * 10) / 10 : null,
-            avgLatency: latencySamples.length ? Math.round(latencySamples.reduce((a, b) => a + b, 0) / latencySamples.length) : null,
-            operators,
-            wifiSamples: wifiRows.length,
-            mobileSamples: mobileRows.length,
-        };
+        const rows = await fetchAdminReadings(2000);
+        res.json({ success: true, summary: buildCoverageSummary(rows) });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/admin/readings', requireAdmin, async (req, res) => {
+    try {
+        const rows = await fetchAdminReadings(req.query.limit || 250);
+        res.json({ success: true, count: rows.length, data: rows });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/admin/users', requireAdmin, async (req, res) => {
+    try {
+        const rows = await fetchAdminReadings(2000);
+        const users = new Map();
+        for (const row of rows) {
+            const key = row.user_id || 'unknown';
+            if (!users.has(key)) {
+                users.set(key, {
+                    id: key,
+                    email: row.mapper_email || null,
+                    username: row.mapper_username || null,
+                    wallet: row.mapper_wallet || null,
+                    walletShort: row.mapper_wallet_short || null,
+                    readings: 0,
+                    confirmed: 0,
+                    pending: 0,
+                    failed: 0,
+                    earnedFlow: 0,
+                    rewardsPaid: 0,
+                    lastSeenAt: null,
+                    lastLat: null,
+                    lastLng: null,
+                    operators: new Set(),
+                    transports: new Set(),
+                });
+            }
+            const user = users.get(key);
+            user.readings++;
+            if (row.status === 'confirmed') user.confirmed++;
+            if (row.status === 'pending') user.pending++;
+            if (row.status === 'failed') user.failed++;
+            if (row.reward_status === 'paid') user.rewardsPaid++;
+            user.earnedFlow += Number(row.bounty_paid || 0);
+            if (!user.lastSeenAt || new Date(row.created_at) > new Date(user.lastSeenAt)) {
+                user.lastSeenAt = row.created_at;
+                user.lastLat = row.lat;
+                user.lastLng = row.lng;
+            }
+            const operator = row.network_operator || row.carrier || row.sim_operator;
+            if (operator) user.operators.add(operator);
+            if (row.network_type || row.technology) user.transports.add(row.network_type || row.technology);
+        }
+
+        const data = [...users.values()].map((user) => ({
+            ...user,
+            earnedFlow: roundNumber(user.earnedFlow, 4),
+            operators: [...user.operators],
+            transports: [...user.transports],
+        })).sort((a, b) => new Date(b.lastSeenAt || 0) - new Date(a.lastSeenAt || 0));
+
+        res.json({ success: true, count: data.length, data });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// New endpoint specifically for the dashboard to pull raw data
+app.get('/api/admin/raw-data', requireAdmin, async (req, res) => {
+    try {
+        const rows = await fetchAdminReadings(500);
+        const summary = buildCoverageSummary(rows);
         res.json({ success: true, count: rows.length, summary, data: rows });
     } catch (err) {
         res.status(500).json({ error: err.message });
