@@ -334,9 +334,16 @@ app.post('/api/speed/upload', express.raw({ type: '*/*', limit: '1mb' }), (req, 
 });
 
 app.get('/api/public-config', (req, res) => {
-    const mapboxToken = process.env.MAPBOX_PUBLIC_TOKEN || process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
+    const mapboxToken = [
+        process.env.MAPBOX_PUBLIC_TOKEN,
+        process.env.MAPBOX_TOKEN,
+        process.env.MAPBOX_API_TOKEN,
+        process.env.EXPO_PUBLIC_MAPBOX_TOKEN,
+        process.env.REACT_APP_MAPBOX_TOKEN,
+        process.env.VITE_MAPBOX_TOKEN,
+    ].map((value) => String(value || '').trim()).find((value) => value.startsWith('pk.')) || '';
     res.json({
-        mapboxToken: mapboxToken.startsWith('pk.') ? mapboxToken : null,
+        mapboxToken: mapboxToken || null,
     });
 });
 

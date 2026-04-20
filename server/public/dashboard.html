@@ -36,6 +36,28 @@
     .chip { border: 1px solid var(--line); background: rgba(255, 255, 255, 0.7); }
     .leaflet-popup-content-wrapper { border-radius: 18px; }
     .hide { display: none !important; }
+    .coverage-marker {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 999px;
+      border: 3px solid #fff;
+      color: #fff;
+      font-weight: 1000;
+      font-size: 13px;
+      box-shadow: 0 14px 34px rgba(15, 23, 42, 0.28), 0 0 0 10px rgba(21, 184, 106, 0.12);
+      transform: translate(-21px, -21px);
+    }
+    .reading-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      background: #1570ef;
+      border: 2px solid #fff;
+      box-shadow: 0 8px 20px rgba(21, 112, 239, 0.35);
+      transform: translate(-6px, -6px);
+    }
   </style>
 </head>
 <body>
@@ -89,6 +111,7 @@
               <p class="text-sm font-bold text-slate-500">Samples, mappers, speed, latency, freshness by area.</p>
             </div>
             <div class="flex flex-wrap gap-2 text-xs font-black uppercase tracking-wider text-slate-500">
+              <span id="map-status" class="chip rounded-full px-3 py-2">loading map</span>
               <span class="chip rounded-full px-3 py-2">green: good</span>
               <span class="chip rounded-full px-3 py-2">amber: slow/medium</span>
               <span class="chip rounded-full px-3 py-2">red: weak/slow</span>
@@ -144,6 +167,7 @@
     const emailKey = 'signalmap_admin_email';
     let map;
     let cellLayer;
+    let rawLayer;
     let baseLayer;
     let publicConfigPromise;
 
@@ -270,7 +294,12 @@
           zoomOffset: -1,
           attribution: '&copy; Mapbox &copy; OpenStreetMap',
           maxZoom: 20,
-        }).addTo(map);
+        });
+        baseLayer.on('tileerror', () => {
+          $('map-status').textContent = 'Mapbox tile error, fallback ready';
+        });
+        baseLayer.addTo(map);
+        $('map-status').textContent = 'Mapbox basemap';
         return;
       }
 
@@ -278,38 +307,72 @@
         attribution: '&copy; OpenStreetMap &copy; CARTO',
         maxZoom: 20,
       }).addTo(map);
+      $('map-status').textContent = 'CARTO fallback';
     }
 
-    async function initMap(cells) {
+    function markerPopup(cell) {
+      return `<div class="space-y-1 text-sm">
+        <b>Coverage cell</b><br />
+        Samples: ${cell.count} / users: ${cell.users ?? 0}<br />
+        Avg down: ${fmt(cell.avgDownload)} Mbps<br />
+        Avg up: ${fmt(cell.avgUpload)} Mbps<br />
+        Latency: ${fmt(cell.avgLatency)} ms<br />
+        Mobile/Wi-Fi: ${cell.mobileSamples ?? 0}/${cell.wifiSamples ?? 0}<br />
+        Operators: ${escapeHtml((cell.carriers || []).join(', ') || 'n/a')}<br />
+        Freshness: ${fmt(cell.freshnessMinutes)} min
+      </div>`;
+    }
+
+    async function initMap(cells, readings = []) {
       const first = cells[0] || { lat: 59.7385, lng: 30.3068 };
       if (!map) {
         map = L.map('coverage-map').setView([first.lat, first.lng], cells.length ? 11 : 4);
         await addBaseLayer();
       }
       if (cellLayer) cellLayer.remove();
+      if (rawLayer) rawLayer.remove();
       cellLayer = L.layerGroup().addTo(map);
+      rawLayer = L.layerGroup().addTo(map);
       const bounds = [];
       cells.forEach((cell) => {
         const color = cellColor(cell);
-        bounds.push([cell.lat, cell.lng]);
-        const marker = L.circleMarker([cell.lat, cell.lng], {
-          radius: Math.min(28, 8 + Math.sqrt(cell.count || 1) * 4),
+        const lat = Number(cell.lat);
+        const lng = Number(cell.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        bounds.push([lat, lng]);
+        L.circleMarker([lat, lng], {
+          radius: Math.min(42, 18 + Math.sqrt(cell.count || 1) * 5),
           fillColor: color,
           color,
-          weight: 2,
-          fillOpacity: 0.36,
-        }).addTo(cellLayer);
-        marker.bindPopup(`<div class="space-y-1 text-sm">
-          <b>Coverage cell</b><br />
-          Samples: ${cell.count} / users: ${cell.users ?? 0}<br />
-          Avg down: ${fmt(cell.avgDownload)} Mbps<br />
-          Avg up: ${fmt(cell.avgUpload)} Mbps<br />
-          Latency: ${fmt(cell.avgLatency)} ms<br />
-          Mobile/Wi-Fi: ${cell.mobileSamples ?? 0}/${cell.wifiSamples ?? 0}<br />
-          Operators: ${escapeHtml((cell.carriers || []).join(', ') || 'n/a')}<br />
-          Freshness: ${fmt(cell.freshnessMinutes)} min
-        </div>`);
+          weight: 4,
+          opacity: 0.92,
+          fillOpacity: 0.34,
+        }).bindPopup(markerPopup(cell)).addTo(cellLayer);
+        L.marker([lat, lng], {
+          icon: L.divIcon({
+            className: '',
+            html: `<div class="coverage-marker" style="background:${color}; box-shadow:0 14px 34px rgba(15,23,42,.28),0 0 0 12px ${color}30">${cell.count || 1}</div>`,
+            iconSize: [42, 42],
+          })
+        }).bindPopup(markerPopup(cell)).addTo(cellLayer);
       });
+
+      readings.slice(0, 250).forEach((reading) => {
+        const lat = Number(reading.lat);
+        const lng = Number(reading.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+        if (!bounds.length) bounds.push([lat, lng]);
+        L.marker([lat, lng], {
+          icon: L.divIcon({ className: '', html: '<div class="reading-dot"></div>', iconSize: [12, 12] })
+        }).bindPopup(`<div class="space-y-1 text-sm">
+          <b>${escapeHtml(reading.network_operator || reading.carrier || reading.sim_operator || 'Unknown')}</b><br />
+          ${escapeHtml(reading.network_type || reading.technology || 'unknown')}<br />
+          Down: ${fmt(reading.speed_down)} Mbps / Latency: ${fmt(reading.latency_ms)} ms<br />
+          ${new Date(reading.created_at).toLocaleString()}
+        </div>`).addTo(rawLayer);
+      });
+
+      $('map-status').textContent += ` · ${cells.length} cells / ${readings.length} readings`;
       setTimeout(() => {
         map.invalidateSize();
         if (bounds.length > 1) {
@@ -379,7 +442,7 @@
         renderFeed(readings.data || []);
         renderUsers(users.data || []);
         showDashboard(true);
-        await initMap(coverage.heatmap || []);
+        await initMap(coverage.heatmap || [], readings.data || []);
         $('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
       } catch (err) {
         if (String(err.message || '').includes('admin') || String(err.message || '').includes('Forbidden') || String(err.message || '').includes('configured')) {
