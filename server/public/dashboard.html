@@ -235,7 +235,8 @@
       try {
         const res = await api('/api/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email, code, otp: code }) });
         localStorage.setItem(tokenKey, res.token);
-        await loadDashboard();
+        const loaded = await loadDashboard();
+        if (!loaded) return;
         showDashboard(true);
       } catch (err) {
         setMessage(err.message || 'Invalid code.', 'error');
@@ -444,12 +445,13 @@
         showDashboard(true);
         await initMap(coverage.heatmap || [], readings.data || []);
         $('last-updated').textContent = `Updated ${new Date().toLocaleTimeString()}`;
+        return true;
       } catch (err) {
         if (String(err.message || '').includes('admin') || String(err.message || '').includes('Forbidden') || String(err.message || '').includes('configured')) {
           localStorage.removeItem(tokenKey);
           showDashboard(false);
           setMessage(err.message, 'error');
-          return;
+          return false;
         }
         throw err;
       }
