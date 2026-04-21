@@ -32,6 +32,7 @@ import {
   startBackgroundMapping,
   stopBackgroundMapping,
 } from '../services/backgroundMapping';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 
 const MAPBOX_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_TOKEN || '';
 const DEFAULT_CENTER = [30, 20];
@@ -78,11 +79,13 @@ type TelemetrySnapshot = {
 };
 
 export default function MapScreen() {
+  const tabBarHeight = useBottomTabBarHeight();
   const {
     token,
     isMapping,
     setIsMapping,
     addReading,
+    updateReading,
     signalBalance,
     totalReadings,
     setStats,
@@ -360,6 +363,15 @@ export default function MapScreen() {
                 : item
             )));
 
+            updateReading(readingId, {
+              speedDown: quality.speedDown,
+              speedUp: quality.speedUp,
+              latencyMs: quality.latencyMs,
+              speedSource: quality.speedSource,
+              speedError: quality.speedError,
+              telemetryRaw: enriched.telemetryRaw,
+            });
+
             if (result.readingId) {
               try {
                 await updateReadingTelemetry(String(result.readingId), {
@@ -393,7 +405,7 @@ export default function MapScreen() {
       sendingRef.current = false;
       setSending(false);
     }
-  }, [addReading, pollReadingUntilFinal, setLastKnownLocation, token]);
+  }, [addReading, pollReadingUntilFinal, setLastKnownLocation, token, updateReading]);
 
   useEffect(() => {
     if (isMapping) {
@@ -652,13 +664,13 @@ export default function MapScreen() {
       ) : null}
 
       {mapVisualReady ? (
-      <View style={styles.bottomOverlay}>
+      <View style={[styles.bottomOverlay, { bottom: Math.max(tabBarHeight - 6, 62) }]}>
         {isMapping ? (
           <View style={styles.sessionStrip}>
             <Text style={styles.sessionStripText}>Session {sessionReadings}</Text>
-            <Text style={styles.sessionStripDivider}>|</Text>
+            <Text style={styles.sessionStripDivider}>•</Text>
             <Text style={styles.sessionStripText}>{sessionEarned.toFixed(4)} FLOW</Text>
-            <Text style={styles.sessionStripDivider}>|</Text>
+            <Text style={styles.sessionStripDivider}>•</Text>
             <Text style={styles.sessionStripText}>
               {backendSessionReadings === 0
                 ? 'Syncing'
@@ -939,21 +951,21 @@ const styles = StyleSheet.create({
   metricLabel: { fontSize: 9, fontWeight: '900', color: '#9AAEAA', letterSpacing: 0.7, textTransform: 'uppercase' },
   metricValue: { fontSize: 14, fontWeight: '900', marginTop: 5, textAlign: 'center' },
   cardHint: { marginTop: 8, fontSize: 10, fontWeight: '800', color: '#6E8782' },
-  bottomOverlay: { position: 'absolute', left: 14, right: 14, bottom: 72, gap: 8 },
+  bottomOverlay: { position: 'absolute', left: 14, right: 14, gap: 6 },
   sessionStrip: {
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(247,255,251,0.9)',
+    backgroundColor: 'rgba(252,254,253,0.82)',
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#DCEEE7',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    borderColor: 'rgba(220,238,231,0.78)',
+    paddingHorizontal: 11,
+    paddingVertical: 6,
     gap: 6,
   },
-  sessionStripText: { fontSize: 10, fontWeight: '900', color: '#174B46' },
-  sessionStripDivider: { fontSize: 10, fontWeight: '900', color: '#8AA59F' },
+  sessionStripText: { fontSize: 10, fontWeight: '800', color: '#335C56' },
+  sessionStripDivider: { fontSize: 9, fontWeight: '900', color: '#9EB7B0' },
   ctaButton: { borderRadius: 20, paddingVertical: 16, alignItems: 'center' },
   startButton: { backgroundColor: '#12B59A' },
   stopButton: { backgroundColor: '#F04E68' },

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   RefreshControl,
@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useFocusEffect } from '@react-navigation/native';
+import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import useMapperStore from '../store/useMapperStore';
 import { getMapperHistory, MapperHistorySession } from '../services/api';
 
@@ -30,18 +30,32 @@ export default function HistoryScreen() {
     confirmedReadings,
     pendingReadings,
     failedReadings,
+    isMapping,
   } = useMapperStore();
   const [data, setData] = useState<HistoryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const isFocused = useIsFocused();
+  const previousMappingRef = useRef(isMapping);
+  const lastRefreshSignatureRef = useRef<string | null>(null);
 
-  const fallbackSessions = useMemo(() => buildLocalSessions(readings), [readings]);
+  const fallbackSessions = useMemo(() => buildLocalSessions(readings, {
+    signalBalance,
+    totalReadings,
+    confirmedReadings,
+    pendingReadings,
+    failedReadings,
+    isMapping,
+  }), [confirmedReadings, failedReadings, isMapping, pendingReadings, readings, signalBalance, totalReadings]);
 
   const load = useCallback(async (showSpinner = false) => {
     if (!token) {
+      setData(null);
+      setError(null);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
     if (showSpinner) setLoading(true);
@@ -71,17 +85,35 @@ export default function HistoryScreen() {
     }, [load])
   );
 
+  useEffect(() => {
+    if (!token || !isFocused) return;
+
+    const stoppedMapping = previousMappingRef.current && !isMapping;
+    previousMappingRef.current = isMapping;
+    const signature = [
+      confirmedReadings,
+      pendingReadings,
+      failedReadings,
+      totalReadings,
+      signalBalance.toFixed(4),
+      stoppedMapping ? 'stopped' : 'steady',
+    ].join(':');
+
+    if (lastRefreshSignatureRef.current === signature) return;
+    lastRefreshSignatureRef.current = signature;
+
+    void load(false);
+  }, [confirmedReadings, failedReadings, isFocused, isMapping, load, pendingReadings, signalBalance, token, totalReadings]);
+
   const summary = useMemo(() => {
     if (data?.summary) return data.summary;
-    const localSummary = buildLocalSummary(fallbackSessions);
-    return {
-      ...localSummary,
-      totalReadings: totalReadings || localSummary.totalReadings,
-      totalEarnedFlow: signalBalance || localSummary.totalEarnedFlow,
-      confirmedReadings: confirmedReadings || localSummary.confirmedReadings,
-      pendingReadings: pendingReadings || localSummary.pendingReadings,
-      failedReadings: failedReadings || localSummary.failedReadings,
-    };
+    return buildLocalSummary(fallbackSessions, {
+      signalBalance,
+      totalReadings,
+      confirmedReadings,
+      pendingReadings,
+      failedReadings,
+    });
   }, [confirmedReadings, data?.summary, failedReadings, fallbackSessions, pendingReadings, signalBalance, totalReadings]);
 
   const sessions = useMemo<SessionView[]>(() => {
@@ -92,7 +124,7 @@ export default function HistoryScreen() {
   const latest = data?.latestSession || sessions[0] || null;
   const displayName = username || email?.split('@')[0] || 'Signal mapper';
   const syncMessage = error
-    ? 'Server history is unavailable right now. Showing local device data.'
+    ? 'Server history is temporarily unavailable. Earnings and reading counts below are coming from local device/store data until backend history sync returns.'
     : !data?.sessions?.length && fallbackSessions.length
       ? 'History is still syncing from backend. Some session metrics may appear later.'
       : null;
@@ -188,7 +220,7 @@ export default function HistoryScreen() {
                         </View>
 
                         <View style={styles.sessionRight}>
-                          <Text style={styles.sessionEarned}>+{session.earnedFlow.toFixed(4)}</Text>
+                          <Text style={styles.sessionEarned}>+{Number(session.earnedFlow || 0).toFixed(4)}</Text>
                           <Text style={styles.sessionEarnedUnit}>FLOW</Text>
                         </View>
                       </TouchableOpacity>
@@ -259,7 +291,17 @@ function SessionStat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function buildLocalSessions(readings: any[]): SessionView[] {
+function buildLocalSessions(
+  readings: any[],
+  store: {
+    signalBalance: number;
+    totalReadings: number;
+    confirmedReadings: number;
+    pendingReadings: number;
+    failedReadings: number;
+    isMapping: boolean;
+  }
+): SessionView[] {
   if (!readings.length) return [];
   const ordered = [...readings]
     .filter((reading) => reading?.createdAt)
@@ -284,7 +326,7 @@ function buildLocalSessions(readings: any[]): SessionView[] {
     }
   }
 
-  return sessions.map(finalizeLocalSession);
+  return reconcileLocalSessions(sessions.map(finalizeLocalSession), store);
 }
 
 function makeLocalSession(reading: any) {
@@ -357,22 +399,69 @@ function finalizeLocalSession(session: { sessionId: string; startedAt: string; e
   };
 }
 
-function buildLocalSummary(sessions: SessionView[]) {
+function buildLocalSummary(
+  sessions: SessionView[],
+  store: {
+    signalBalance: number;
+    totalReadings: number;
+    confirmedReadings: number;
+    pendingReadings: number;
+    failedReadings: number;
+  }
+) {
   const todayKey = new Date().toDateString();
   const todaySessions = sessions.filter((session) => new Date(session.endedAt).toDateString() === todayKey);
   return {
     totalSessions: sessions.length,
     todaySessions: todaySessions.length,
-    totalReadings: sessions.reduce((sum, session) => sum + session.readings, 0),
-    totalEarnedFlow: Number(sessions.reduce((sum, session) => sum + Number(session.earnedFlow || 0), 0).toFixed(4)),
+    totalReadings: store.totalReadings || sessions.reduce((sum, session) => sum + session.readings, 0),
+    totalEarnedFlow: Number((store.signalBalance || sessions.reduce((sum, session) => sum + Number(session.earnedFlow || 0), 0)).toFixed(4)),
     todayEarnedFlow: Number(todaySessions.reduce((sum, session) => sum + Number(session.earnedFlow || 0), 0).toFixed(4)),
     avgDownload: average(sessions.map((session) => session.avgDownload).filter((v) => v != null)),
     avgUpload: average(sessions.map((session) => session.avgUpload).filter((v) => v != null)),
     avgLatency: average(sessions.map((session) => session.avgLatency).filter((v) => v != null)),
-    confirmedReadings: sessions.reduce((sum, session) => sum + session.confirmedReadings, 0),
-    pendingReadings: sessions.reduce((sum, session) => sum + session.pendingReadings, 0),
-    failedReadings: sessions.reduce((sum, session) => sum + session.failedReadings, 0),
+    confirmedReadings: store.confirmedReadings || sessions.reduce((sum, session) => sum + session.confirmedReadings, 0),
+    pendingReadings: store.pendingReadings || sessions.reduce((sum, session) => sum + session.pendingReadings, 0),
+    failedReadings: store.failedReadings || sessions.reduce((sum, session) => sum + session.failedReadings, 0),
   };
+}
+
+function reconcileLocalSessions(
+  sessions: SessionView[],
+  store: {
+    signalBalance: number;
+    totalReadings: number;
+    confirmedReadings: number;
+    pendingReadings: number;
+    failedReadings: number;
+    isMapping: boolean;
+  }
+) {
+  if (!sessions.length) return sessions;
+
+  const localConfirmed = sessions.reduce((sum, session) => sum + session.confirmedReadings, 0);
+  const localPending = sessions.reduce((sum, session) => sum + session.pendingReadings, 0);
+  const localFailed = sessions.reduce((sum, session) => sum + session.failedReadings, 0);
+  const localEarned = Number(sessions.reduce((sum, session) => sum + Number(session.earnedFlow || 0), 0).toFixed(4));
+
+  const next = sessions.map((session) => ({ ...session }));
+  const targetIndex = 0;
+  const target = { ...next[targetIndex] };
+
+  const confirmedDelta = Math.max(store.confirmedReadings - localConfirmed, 0);
+  const pendingDelta = Math.max(store.pendingReadings - localPending, 0);
+  const failedDelta = Math.max(store.failedReadings - localFailed, 0);
+  const earnedDelta = Number(Math.max(store.signalBalance - localEarned, 0).toFixed(4));
+
+  target.confirmedReadings += confirmedDelta;
+  target.pendingReadings += pendingDelta;
+  target.failedReadings += failedDelta;
+  target.readings = Math.max(target.readings, target.confirmedReadings + target.pendingReadings + target.failedReadings);
+  target.earnedFlow = Number((target.earnedFlow + earnedDelta).toFixed(4));
+  target.isActive = store.isMapping || target.isActive;
+
+  next[targetIndex] = target;
+  return next;
 }
 
 function countBy(values: string[]) {

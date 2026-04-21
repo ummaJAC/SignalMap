@@ -182,6 +182,202 @@ function buildCoverageSummary(rows) {
     };
 }
 
+const SESSION_GAP_MS = 20 * 60 * 1000;
+
+function averageOf(values, digits = 1) {
+    const numeric = values.map((value) => Number(value)).filter(Number.isFinite);
+    if (!numeric.length) return null;
+    return roundNumber(numeric.reduce((sum, value) => sum + value, 0) / numeric.length, digits);
+}
+
+function getMode(values, fallback = 'Unknown') {
+    const counts = new Map();
+    for (const value of values.filter(Boolean)) {
+        counts.set(value, (counts.get(value) || 0) + 1);
+    }
+    if (!counts.size) return fallback;
+    return [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+}
+
+function getReadingOperator(row) {
+    return row.network_operator || row.carrier || row.sim_operator || 'Unknown';
+}
+
+function getReadingTransport(row) {
+    const raw = String(row.network_type || '').toLowerCase();
+    if (raw.includes('wifi')) return 'wifi';
+    if (raw.includes('cellular')) return 'cellular';
+    if (row.wifi_ssid || Number(row.wifi_count || 0) > 0) return 'wifi';
+    return raw || 'unknown';
+}
+
+function getSignalValue(row) {
+    const candidates = [row.signal_dbm, row.dbm, row.rsrp];
+    for (const candidate of candidates) {
+        const number = Number(candidate);
+        if (Number.isFinite(number)) return number;
+    }
+    return null;
+}
+
+function haversineMeters(lat1, lng1, lat2, lng2) {
+    const toRad = (value) => value * (Math.PI / 180);
+    const earthRadius = 6371000;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a = Math.sin(dLat / 2) ** 2
+        + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return earthRadius * c;
+}
+
+function estimateDistanceMeters(rows) {
+    if (!rows.length) return 0;
+    let distance = 0;
+    for (let i = 1; i < rows.length; i++) {
+        const prev = rows[i - 1];
+        const current = rows[i];
+        if ([prev.lat, prev.lng, current.lat, current.lng].every((value) => Number.isFinite(Number(value)))) {
+            distance += haversineMeters(Number(prev.lat), Number(prev.lng), Number(current.lat), Number(current.lng));
+        }
+    }
+    return Math.round(distance);
+}
+
+function estimateCoverageKm2(rows) {
+    if (rows.length < 2) return 0;
+    const lats = rows.map((row) => Number(row.lat)).filter(Number.isFinite);
+    const lngs = rows.map((row) => Number(row.lng)).filter(Number.isFinite);
+    if (lats.length < 2 || lngs.length < 2) return 0;
+
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
+    const midLat = ((minLat + maxLat) / 2) * (Math.PI / 180);
+    const widthMeters = Math.abs(maxLng - minLng) * 111320 * Math.cos(midLat);
+    const heightMeters = Math.abs(maxLat - minLat) * 111320;
+    const areaKm2 = Math.max(widthMeters * heightMeters, 0) / 1_000_000;
+    return roundNumber(areaKm2, 2) || 0;
+}
+
+function simplifySessionItem(row) {
+    return {
+        id: row.id,
+        createdAt: row.created_at,
+        status: row.status || 'pending',
+        rewardStatus: row.reward_status || 'pending',
+        bountyPaid: Number(row.bounty_paid || 0),
+        operator: getReadingOperator(row),
+        transport: getReadingTransport(row),
+        technology: row.technology || null,
+        signalDbm: getSignalValue(row),
+        speedDown: Number.isFinite(Number(row.speed_down)) ? Number(row.speed_down) : null,
+        speedUp: Number.isFinite(Number(row.speed_up)) ? Number(row.speed_up) : null,
+        latencyMs: Number.isFinite(Number(row.latency_ms)) ? Number(row.latency_ms) : null,
+        wifiSsid: row.wifi_ssid || null,
+        trustReceiptTx: row.trust_receipt_tx || null,
+        rewardTxHash: row.reward_tx_hash || null,
+        lat: Number(row.lat),
+        lng: Number(row.lng),
+    };
+}
+
+function buildMapperSession(sessionRows, indexFromOldest) {
+    const items = sessionRows.map(simplifySessionItem);
+    const confirmedReadings = items.filter((item) => item.status === 'confirmed').length;
+    const pendingReadings = items.filter((item) => item.status === 'pending').length;
+    const failedReadings = items.filter((item) => item.status === 'failed').length;
+    const distanceMeters = estimateDistanceMeters(sessionRows);
+    const coverageKm2 = estimateCoverageKm2(sessionRows);
+    const startedAt = items[0]?.createdAt || null;
+    const endedAt = items[items.length - 1]?.createdAt || startedAt;
+    const startedMs = startedAt ? new Date(startedAt).getTime() : Date.now();
+    const endedMs = endedAt ? new Date(endedAt).getTime() : startedMs;
+
+    return {
+        sessionId: `session-${startedAt || Date.now()}-${indexFromOldest + 1}`,
+        startedAt,
+        endedAt,
+        durationMinutes: Math.max(1, Math.round((endedMs - startedMs) / 60000)),
+        isActive: Date.now() - endedMs < SESSION_GAP_MS,
+        readings: items.length,
+        confirmedReadings,
+        pendingReadings,
+        failedReadings,
+        earnedFlow: roundNumber(items.reduce((sum, item) => sum + Number(item.bountyPaid || 0), 0), 4) || 0,
+        avgSignalDbm: averageOf(items.map((item) => item.signalDbm), 0),
+        avgDownload: averageOf(items.map((item) => item.speedDown), 1),
+        avgUpload: averageOf(items.map((item) => item.speedUp), 1),
+        avgLatency: averageOf(items.map((item) => item.latencyMs), 0),
+        primaryOperator: getMode(items.map((item) => item.operator), 'Unknown'),
+        primaryTransport: getMode(items.map((item) => item.transport), 'unknown'),
+        wifiVsMobile: {
+            wifi: items.filter((item) => item.transport === 'wifi').length,
+            mobile: items.filter((item) => item.transport === 'cellular').length,
+        },
+        approxDistanceMeters: distanceMeters,
+        approxCoverageKm2: coverageKm2,
+        items: items.reverse(),
+    };
+}
+
+function buildMapperHistory(rows, options = {}) {
+    const sortedRows = [...rows].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+    const sessions = [];
+    let currentSession = [];
+
+    for (const row of sortedRows) {
+        if (!currentSession.length) {
+            currentSession.push(row);
+            continue;
+        }
+
+        const previous = currentSession[currentSession.length - 1];
+        const previousMs = new Date(previous.created_at).getTime();
+        const currentMs = new Date(row.created_at).getTime();
+        if (currentMs - previousMs >= SESSION_GAP_MS) {
+            sessions.push(buildMapperSession(currentSession, sessions.length));
+            currentSession = [row];
+        } else {
+            currentSession.push(row);
+        }
+    }
+
+    if (currentSession.length) {
+        sessions.push(buildMapperSession(currentSession, sessions.length));
+    }
+
+    const newestFirstSessions = sessions.reverse();
+    const todayKey = new Date().toDateString();
+    const todaySessions = newestFirstSessions.filter((session) => session.endedAt && new Date(session.endedAt).toDateString() === todayKey);
+
+    const totalReadings = Number.isFinite(Number(options.totalReadings)) ? Number(options.totalReadings) : rows.length;
+    const totalEarnedFlow = Number.isFinite(Number(options.totalEarnedFlow))
+        ? roundNumber(Number(options.totalEarnedFlow), 4) || 0
+        : roundNumber(newestFirstSessions.reduce((sum, session) => sum + Number(session.earnedFlow || 0), 0), 4) || 0;
+
+    const summary = {
+        totalSessions: newestFirstSessions.length,
+        todaySessions: todaySessions.length,
+        totalReadings,
+        totalEarnedFlow,
+        todayEarnedFlow: roundNumber(todaySessions.reduce((sum, session) => sum + Number(session.earnedFlow || 0), 0), 4) || 0,
+        avgDownload: averageOf(rows.map((row) => row.speed_down), 1),
+        avgUpload: averageOf(rows.map((row) => row.speed_up), 1),
+        avgLatency: averageOf(rows.map((row) => row.latency_ms), 0),
+        confirmedReadings: rows.filter((row) => row.status === 'confirmed').length,
+        pendingReadings: rows.filter((row) => row.status === 'pending').length,
+        failedReadings: rows.filter((row) => row.status === 'failed').length,
+    };
+
+    return {
+        summary,
+        latestSession: newestFirstSessions[0] || null,
+        sessions: newestFirstSessions,
+    };
+}
+
 // --- OpenRouter AI Setup ---
 const openai = new OpenAI({
     apiKey: process.env.OPENROUTER_API_KEY,
@@ -2434,6 +2630,44 @@ app.get('/api/coverage/detailed', requireAuth, async (req, res) => {
         res.set('X-402-Recipient', DEPLOYER_ADDRESS || '');
 
         res.json({ readings: readings || [], count: (readings || []).length });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/api/mapper/history', requireAuth, async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const maxLimit = Math.min(Math.max(parseInt(req.query.limit) || 300, 50), 1000);
+        const [{ data: rows, error }, { count: totalReadings, error: countError }, { data: profile, error: profileError }] = await Promise.all([
+            supabaseAdmin
+                .from('signal_readings')
+                .select('id, created_at, lat, lng, carrier, technology, network_type, network_operator, sim_operator, signal_dbm, dbm, rsrp, speed_down, speed_up, latency_ms, status, reward_status, bounty_paid, wifi_ssid, wifi_count, trust_receipt_tx, reward_tx_hash')
+                .eq('user_id', userId)
+                .order('created_at', { ascending: false })
+                .limit(maxLimit),
+            supabaseAdmin
+                .from('signal_readings')
+                .select('id', { count: 'exact', head: true })
+                .eq('user_id', userId),
+            supabaseAdmin
+                .from('profiles')
+                .select('signal_balance')
+                .eq('id', userId)
+                .maybeSingle(),
+        ]);
+
+        if (error) throw error;
+        if (countError) throw countError;
+        if (profileError) throw profileError;
+
+        res.json({
+            success: true,
+            ...buildMapperHistory(rows || [], {
+                totalReadings: totalReadings || 0,
+                totalEarnedFlow: profile?.signal_balance,
+            }),
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

@@ -117,6 +117,7 @@ interface MapperState {
   setEvmAddress: (addr: string | null) => void;
   setIsMapping: (val: boolean) => void;
   addReading: (r: SignalReading) => void;
+  updateReading: (id: string, patch: Partial<SignalReading>) => void;
   setBalances: (signal: number, flow: number) => void;
   setStats: (stats: {
     signalBalance?: number;
@@ -184,6 +185,13 @@ const useMapperStore = create<MapperState>()(
       setIsMapping: (isMapping) => set({ isMapping }),
       addReading: (r) => set((s) => ({
         readings: [r, ...s.readings].slice(0, 100),
+      })),
+      updateReading: (id, patch) => set((s) => ({
+        readings: s.readings.map((reading) => (
+          reading.id === id
+            ? { ...reading, ...patch }
+            : reading
+        )),
       })),
       setBalances: (signalBalance, flowBalance) => set({ signalBalance, flowBalance }),
       setStats: (stats) => set((s) => ({
