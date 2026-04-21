@@ -50,7 +50,11 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const port = process.env.PORT || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || 'geocorp-super-secret-key-123';
+const JWT_SECRET = String(process.env.JWT_SECRET || '').trim();
+
+if (!JWT_SECRET) {
+    throw new Error('Missing JWT_SECRET in environment');
+}
 
 // --- Auth Middleware ---
 const requireAuth = (req, res, next) => {
@@ -59,13 +63,7 @@ const requireAuth = (req, res, next) => {
         return res.status(401).json({ error: 'Unauthorized: No token provided' });
     }
     const token = authHeader.split(' ')[1];
-    
-    // Hackathon dev bypass 
-    if (token.startsWith('dev-token-')) {
-        req.user = { id: '00000000-0000-0000-0000-000000000000', evm_address: '0x0000000000000000000000000000000000000001' };
-        return next();
-    }
-    
+
     try {
         const decoded = jwt.verify(token, JWT_SECRET);
         req.user = decoded;
@@ -500,7 +498,19 @@ if (process.env.DEPLOYER_PRIVATE_KEY) {
     console.warn("Missing DEPLOYER_PRIVATE_KEY. Blockchain features disabled.");
 }
 
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 5 * 1024 * 1024,
+        files: 1,
+    },
+    fileFilter: (req, file, cb) => {
+        if (!file?.mimetype?.startsWith('image/')) {
+            return cb(new Error('Only image uploads are allowed'));
+        }
+        cb(null, true);
+    },
+});
 
 app.use(cors());
 app.use(express.json());
@@ -2604,7 +2614,7 @@ app.get('/api/coverage', async (req, res) => {
 });
 
 // GET /api/coverage/detailed — x402 paid granular data
-app.get('/api/coverage/detailed', requireAuth, async (req, res) => {
+app.get('/api/coverage/detailed', requireAdmin, async (req, res) => {
     try {
         const { bounds, carrier, technology, limit } = req.query;
         const maxLimit = Math.min(parseInt(limit) || 500, 2000);
@@ -2737,6 +2747,16 @@ app.get('/api/mapper/stats', requireAuth, async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+app.use((err, req, res, next) => {
+    if (err?.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'Image is too large. Max upload size is 5 MB.' });
+    }
+    if (err?.message === 'Only image uploads are allowed') {
+        return res.status(400).json({ error: err.message });
+    }
+    return next(err);
 });
 
 app.listen(port, '0.0.0.0', () => {

@@ -2,6 +2,7 @@ import express from 'express';
 import { ethers } from 'ethers';
 import { supabaseAdmin } from './supabaseClient.js';
 import jwt from 'jsonwebtoken';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 
 const router = express.Router();
 
@@ -9,6 +10,50 @@ const FLOW_PROVIDER = new ethers.JsonRpcProvider('https://testnet.evm.nodes.onfl
 const DEPLOYER_WALLET = process.env.DEPLOYER_PRIVATE_KEY
     ? new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY, FLOW_PROVIDER)
     : null;
+const JWT_SECRET = String(process.env.JWT_SECRET || '').trim();
+const WALLET_ENCRYPTION_SECRET = String(process.env.WALLET_ENCRYPTION_KEY || JWT_SECRET).trim();
+const ENCRYPTED_KEY_PREFIX = 'enc:v1';
+
+if (!JWT_SECRET) {
+    throw new Error('Missing JWT_SECRET in environment');
+}
+
+const WALLET_ENCRYPTION_KEY = createHash('sha256').update(WALLET_ENCRYPTION_SECRET).digest();
+
+function isEncryptedPrivateKey(value) {
+    return String(value || '').startsWith(`${ENCRYPTED_KEY_PREFIX}:`);
+}
+
+function encryptPrivateKey(privateKey) {
+    const raw = String(privateKey || '').trim();
+    if (!raw) return raw;
+    if (isEncryptedPrivateKey(raw)) return raw;
+
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', WALLET_ENCRYPTION_KEY, iv);
+    const ciphertext = Buffer.concat([cipher.update(raw, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return `${ENCRYPTED_KEY_PREFIX}:${iv.toString('hex')}:${tag.toString('hex')}:${ciphertext.toString('hex')}`;
+}
+
+function decryptPrivateKey(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return null;
+    if (!isEncryptedPrivateKey(raw)) return raw;
+
+    const [, ivHex, tagHex, cipherHex] = raw.split(':');
+    if (!ivHex || !tagHex || !cipherHex) {
+        throw new Error('Invalid encrypted private key payload');
+    }
+
+    const decipher = createDecipheriv('aes-256-gcm', WALLET_ENCRYPTION_KEY, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(tagHex, 'hex'));
+    const plaintext = Buffer.concat([
+        decipher.update(Buffer.from(cipherHex, 'hex')),
+        decipher.final(),
+    ]);
+    return plaintext.toString('utf8');
+}
 
 async function fundNewWallet(address) {
     if (!DEPLOYER_WALLET) {
@@ -107,7 +152,7 @@ router.post('/verify-otp', async (req, res) => {
             console.log(`✅ Login: ${profile.username} (${normalizedEmail})`);
             
             // Generate a long-lived custom JWT (30 days) to prevent 1-hour logouts
-            const customToken = jwt.sign({ id: profile.id, email: profile.email }, process.env.JWT_SECRET || 'geocorp-super-secret-key-123', { expiresIn: '30d' });
+            const customToken = jwt.sign({ id: profile.id, email: profile.email }, JWT_SECRET, { expiresIn: '30d' });
 
             return res.json({
                 token: customToken,
@@ -133,7 +178,7 @@ router.post('/verify-otp', async (req, res) => {
                 email: normalizedEmail,
                 username,
                 evm_address: newWallet.address,
-                evm_private_key: newWallet.privateKey,
+                evm_private_key: encryptPrivateKey(newWallet.privateKey),
                 geo_balance: 50, // Welcome bonus
             })
             .select()
@@ -159,7 +204,7 @@ router.post('/verify-otp', async (req, res) => {
             if (fundTx) console.log(`✅ Auto-funded ${newWallet.address} (tx: ${fundTx})`);
         });
 
-        const customToken = jwt.sign({ id: newProfile.id, email: newProfile.email }, process.env.JWT_SECRET || 'geocorp-super-secret-key-123', { expiresIn: '30d' });
+        const customToken = jwt.sign({ id: newProfile.id, email: newProfile.email }, JWT_SECRET, { expiresIn: '30d' });
 
         res.json({
             token: customToken,
@@ -241,7 +286,7 @@ router.post('/google', async (req, res) => {
             }).catch(() => ({ data: null }));
 
             console.log(`✅ Google Login: ${profile.username} (${email})`);
-            const customToken = jwt.sign({ id: profile.id, email: profile.email }, process.env.JWT_SECRET || 'geocorp-super-secret-key-123', { expiresIn: '30d' });
+            const customToken = jwt.sign({ id: profile.id, email: profile.email }, JWT_SECRET, { expiresIn: '30d' });
             return res.json({
                 token: customToken,
                 user: {
@@ -266,7 +311,7 @@ router.post('/google', async (req, res) => {
                 email,
                 username,
                 evm_address: newWallet.address,
-                evm_private_key: newWallet.privateKey,
+                evm_private_key: encryptPrivateKey(newWallet.privateKey),
                 geo_balance: 50,
             })
             .select()
@@ -292,7 +337,7 @@ router.post('/google', async (req, res) => {
             if (fundTx) console.log(`✅ Auto-funded ${newWallet.address} (tx: ${fundTx})`);
         });
 
-        const customToken = jwt.sign({ id: newProfile.id, email: newProfile.email }, process.env.JWT_SECRET || 'geocorp-super-secret-key-123', { expiresIn: '30d' });
+        const customToken = jwt.sign({ id: newProfile.id, email: newProfile.email }, JWT_SECRET, { expiresIn: '30d' });
 
         res.json({
             token: customToken,
@@ -316,9 +361,11 @@ router.get('/export-key', async (req, res) => {
     try {
         // Verify JWT manually (same logic as requireAuth in index.js)
         const authHeader = req.headers.authorization;
-        if (!authHeader) return res.status(401).json({ error: 'No token' });
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({ error: 'No token' });
+        }
         const token = authHeader.split(' ')[1];
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'geocorp-super-secret-key-123');
+        const decoded = jwt.verify(token, JWT_SECRET);
 
         const { data: profile } = await supabaseAdmin
             .from('profiles')
@@ -327,7 +374,17 @@ router.get('/export-key', async (req, res) => {
             .single();
 
         if (!profile) return res.status(404).json({ error: 'Profile not found' });
-        res.json({ privateKey: profile.evm_private_key });
+        const privateKey = decryptPrivateKey(profile.evm_private_key);
+
+        if (privateKey && !isEncryptedPrivateKey(profile.evm_private_key)) {
+            await supabaseAdmin
+                .from('profiles')
+                .update({ evm_private_key: encryptPrivateKey(privateKey) })
+                .eq('id', decoded.id);
+        }
+
+        res.setHeader('Cache-Control', 'no-store');
+        res.json({ privateKey });
     } catch (err) {
         res.status(401).json({ error: 'Unauthorized' });
     }
