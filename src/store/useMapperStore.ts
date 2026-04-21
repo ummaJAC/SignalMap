@@ -159,10 +159,26 @@ const useMapperStore = create<MapperState>()(
       ...initialState,
 
       setToken: (token) => set({ token }),
-      setUser: (user) => set({
-        email: user.email ?? null,
-        username: user.username ?? null,
-        evmAddress: user.evm_address ?? user.evmAddress ?? null,
+      setUser: (user) => set((state) => {
+        const nextEmail = user.email ?? null;
+        const previousEmail = state.email ?? null;
+        const isNewUser = !!nextEmail && !!previousEmail && nextEmail.toLowerCase() !== previousEmail.toLowerCase();
+
+        if (!isNewUser) {
+          return {
+            email: nextEmail,
+            username: user.username ?? null,
+            evmAddress: user.evm_address ?? user.evmAddress ?? null,
+          };
+        }
+
+        return {
+          ...initialState,
+          token: state.token,
+          email: nextEmail,
+          username: user.username ?? null,
+          evmAddress: user.evm_address ?? user.evmAddress ?? null,
+        };
       }),
       setEvmAddress: (evmAddress) => set({ evmAddress }),
       setIsMapping: (isMapping) => set({ isMapping }),
